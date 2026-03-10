@@ -20,3 +20,6 @@ transcription_spanish.txt
 
 # info
 info.txt
+
+# Mac
+.DS_Store
