@@ -29,9 +29,15 @@ def clean_text(line):
     line = re.sub(r"\d{2}:\d{2}:\d{2}", "", line)
 
     return line.strip()
+    
+# assign interview role based on chosen interviewer speaker
+def assign_role(speaker, interviewer_speaker):
+    if speaker == interviewer_speaker:
+        return "interviewer"
+    return "participant"
 
 # process the transcript file and return a cleaned dataframe
-def preprocess_transcript(file_path):
+def preprocess_transcript(file_path, interviewer_speaker=None):
     data = []
 
     # open transcript file and iterate through each line
@@ -48,12 +54,22 @@ def preprocess_transcript(file_path):
 
             # clean transcript text for topic modeling
             cleaned = clean_text(line)
+            
+            # exclude interviewer turns
+            if interviewer_speaker is None:
+                role = "participant"
+                include_in_topic_model = True
+            else:
+                role = assign_role(speaker, interviewer_speaker)
+                include_in_topic_model = role == "participant"
 
             # store results in structured format
             data.append({
                 "segment_id": i,
                 "speaker": speaker,
                 "timestamp": timestamp,
+                "role": role,
+                "include_in_topic_model": include_in_topic_model,
                 "cleaned_text": cleaned
             })
 
@@ -65,14 +81,17 @@ if __name__ == "__main__":
 
     # ensure a transcript file was provided as a command line argument
     if len(sys.argv) < 2:
-        print("Usage: python preprocess.py <transcript_file>")
+        print("Usage: python preprocess.py <transcript_file> [interviewer_speaker]")
         sys.exit(1)
 
     # read transcript file path from command line
     transcript_file = sys.argv[1]
+    
+    # optional interviewer speaker label, e.g. SPEAKER_01
+    interviewer_speaker = sys.argv[2] if len(sys.argv) > 2 else None
 
     # run preprocessing pipeline on transcript
-    df = preprocess_transcript(transcript_file)
+    df = preprocess_transcript(transcript_file, interviewer_speaker)
     
     # ensure output directory exists
     os.makedirs("../output", exist_ok=True)
@@ -88,3 +107,8 @@ if __name__ == "__main__":
 
     # confirm preprocessing completed successfully
     print(f"Preprocessed transcript saved to {output_file}")
+    
+    if interviewer_speaker is None:
+        print("No interviewer speaker was provided. All segments will be included in topic modeling.")
+    else:
+        print(f"Interviewer speaker set to: {interviewer_speaker}")

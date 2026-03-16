@@ -16,6 +16,11 @@ def load_data(file_path):
     # remove empty rows
     df = df.dropna(subset=["cleaned_text"]).copy()
     df["cleaned_text"] = df["cleaned_text"].astype(str).str.strip()
+    
+    # exclude interviewer turns if specified
+    if "include_in_topic_model" in df.columns:
+        df["include_in_topic_model"] = df["include_in_topic_model"].astype(str).str.lower()
+        df = df[df["include_in_topic_model"].isin(["true"])].copy()
 
     # remove very short segments for line-based sprint 1 testing
     df = df[df["cleaned_text"].str.len() >= 15].reset_index(drop=True)
@@ -77,7 +82,7 @@ def save_model(topic_model, original_name):
     # ensure output directory exists
     os.makedirs("../output", exist_ok=True)
 
-    model_path = f"../output/topic_model_{original_name}"
+    model_path = f"../output/{original_name}_topic_model"
 
     topic_model.save(model_path)
 
@@ -124,7 +129,7 @@ if __name__ == "__main__":
 
     # load cleaned transcript
     df, documents = load_data(input_file)
-
+    
     # generate embeddings
     embeddings = generate_embeddings(documents)
 
