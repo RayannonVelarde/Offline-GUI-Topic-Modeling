@@ -32,6 +32,10 @@ class JobCard(QFrame):
         top.addWidget(self.pct_lbl)
         layout.addLayout(top)
 
+        # If starting at 100%, show the percentage in green
+        if pct == 100:
+            self.pct_lbl.setStyleSheet("color: #22c55e;")
+
         # Progress bar
         self.bar = QProgressBar()
         self.bar.setMaximum(100)
@@ -54,6 +58,8 @@ class JobCard(QFrame):
             self.pct_lbl.setText(f"{pct}%")
             if pct == 100:
                 self.bar.setObjectName("complete")
+                # Make the 100% text green when complete
+                self.pct_lbl.setStyleSheet("color: #22c55e;")
 
 # Handles drag & drop and click‑to‑open dialog.
 class DropZone(QLabel):

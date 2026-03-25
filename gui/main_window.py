@@ -84,8 +84,8 @@ class StatusColumnDelegate(QStyledItemDelegate):
         else:
             painter.setPen(QColor(color_hex))
         painter.drawText(
-            option.rect.adjusted(14, 0, -14, 0),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            option.rect,
+            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
             text,
         )
 
@@ -158,9 +158,10 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        root_layout.addWidget(self._build_sidebar())
-        root_layout.addWidget(self._build_center(), stretch=1)
-        root_layout.addWidget(self._build_right_panel())
+        # Give side panels a bit more space while keeping center dominant
+        root_layout.addWidget(self._build_sidebar(), stretch=1)
+        root_layout.addWidget(self._build_center(), stretch=3)
+        root_layout.addWidget(self._build_right_panel(), stretch=1)
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     def _build_sidebar(self) -> QFrame:
@@ -198,11 +199,14 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(center)
         layout.setContentsMargins(32, 28, 32, 28)
         layout.setSpacing(16)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
         title = QLabel("Transcription Home")
         title.setObjectName("page-title")
+        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         subtitle = QLabel("Upload audio files for transcription and translation")
         subtitle.setObjectName("page-sub")
+        subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(title)
         layout.addWidget(subtitle)
 
@@ -213,6 +217,8 @@ class MainWindow(QMainWindow):
         add_btn.setFixedWidth(130)
         add_btn.clicked.connect(self.open_files_dialog)
         layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        # Add a bit of vertical breathing room before the table
+        layout.addSpacing(12)
 
         layout.addWidget(self._build_table())
 
@@ -227,7 +233,8 @@ class MainWindow(QMainWindow):
 
     def _build_table(self) -> QTableWidget:
         self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Filename", "Duration", "Status"])
+        # Columns: 0 = Duration, 1 = Filename (center), 2 = Status
+        self.table.setHorizontalHeaderLabels(["Duration", "Filename", "Status"])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -235,9 +242,11 @@ class MainWindow(QMainWindow):
         self.table.setMinimumHeight(200)
 
         hdr = self.table.horizontalHeader()
+        # Make all three columns share available width equally
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
 
         self.table.setItemDelegateForColumn(2, StatusColumnDelegate(self.table))
 
@@ -254,7 +263,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(16, 24, 16, 16)
         layout.setSpacing(12)
 
-        queue_title = QLabel("⚡  JOB QUEUE")
+        queue_title = QLabel("⚡  PROCESSING QUEUE")
         queue_title.setObjectName("section-title")
         layout.addWidget(queue_title)
 
@@ -271,6 +280,11 @@ class MainWindow(QMainWindow):
         self.log_box.setObjectName("log-box")
         self.log_box.setReadOnly(True)
         self.log_box.setPlainText("")
+        # Slightly increase log output text size for readability
+        font = self.log_box.font()
+        if font.pointSize() > 0:
+            font.setPointSize(font.pointSize() + 2)
+            self.log_box.setFont(font)
         layout.addWidget(self.log_box, stretch=1)
 
         return right
@@ -279,12 +293,19 @@ class MainWindow(QMainWindow):
     def _append_table_row(self, fname: str, duration: str, status: str, full_path: str | None = None):
         row = self.table.rowCount()
         self.table.insertRow(row)
+        # Duration in left column (0)
+        dur_item = QTableWidgetItem(duration)
+        dur_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.table.setItem(row, 0, dur_item)
+
+        # Filename in center column (1)
         item = QTableWidgetItem(fname)
+        item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         if full_path:
             item.setData(Qt.ItemDataRole.UserRole, full_path)
-        self.table.setItem(row, 0, item)
-        self.table.setItem(row, 1, QTableWidgetItem(duration))
+        self.table.setItem(row, 1, item)
         status_item = QTableWidgetItem(status)
+        status_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         status_item.setForeground(QColor(STATUS_COLORS.get(status, "#94a3b8")))
         self.table.setItem(row, 2, status_item)
         self.table.setRowHeight(row, 48)
@@ -320,7 +341,8 @@ class MainWindow(QMainWindow):
 
             # Run the job for the first selected row
             selected_row = selected_ranges[0].topRow()
-            item = self.table.item(selected_row, 0)
+            # Filename is stored in column 1 (center)
+            item = self.table.item(selected_row, 1)
             fname = item.text()
             full_path = item.data(Qt.ItemDataRole.UserRole) or fname
 
