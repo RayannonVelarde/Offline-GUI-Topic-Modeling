@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
 from widgets import JobCard, DropZone
 
 # Path to mixbothtask.py (same directory as this file)
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MIXBOTHTASK_PATH = os.path.join(SCRIPT_DIR, "mixbothtask.py")
 
 
