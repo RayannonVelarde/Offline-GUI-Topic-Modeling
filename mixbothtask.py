@@ -6,6 +6,7 @@ import time
 torch.serialization.add_safe_globals(['omegaconf.listconfig.ListConfig'])
 from pyannote.audio import Pipeline
 import pandas as pd
+import sys
 
 _original_torch_load = torch.load
 
@@ -25,7 +26,7 @@ if your_token is None:
 
 # --- SETTINGS ---
 # audio_file = "Podcast_4_Interview_with_Quique.mp3"  # <--- Your Spanish audio file here
-audio_file = "FB_03_ES_GC_02_C1_FB_03_ES_GC_02_C2_16khz.wav"
+audio_file = sys.argv[1]
 output_txt_spanish = "transcription_spanish.txt"
 output_txt_english = "transcription_english.txt"
 batch_size = 8 #16

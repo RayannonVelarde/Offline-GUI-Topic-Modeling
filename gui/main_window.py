@@ -77,7 +77,6 @@ class StatusColumnDelegate(QStyledItemDelegate):
     def paint(self, painter: QPainter, option, index):
         text = index.data(Qt.ItemDataRole.DisplayRole) or ""
         color_hex = STATUS_COLORS.get(text, "#94a3b8")
-        # Draw background for selection state
         if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, option.palette.highlight())
             painter.setPen(option.palette.highlightedText().color())
@@ -106,7 +105,6 @@ NAV_ITEMS = [
     ("🏠  Home",          True),
     ("📄  Files",         False),
     ("⚙  Jobs",          False),
-    ("🔍 Topic Modeling", False),
     ("⚙  Settings",      False),
     ("↓  Export",         False),
 ]
@@ -158,10 +156,13 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # Give side panels a bit more space while keeping center dominant
         root_layout.addWidget(self._build_sidebar(), stretch=1)
         root_layout.addWidget(self._build_center(), stretch=3)
-        root_layout.addWidget(self._build_right_panel(), stretch=1)
+
+        # Right panel hidden by default; toggled by the Queue button
+        self._right_panel = self._build_right_panel()
+        self._right_panel.hide()
+        root_layout.addWidget(self._right_panel, stretch=1)
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     def _build_sidebar(self) -> QFrame:
@@ -201,14 +202,28 @@ class MainWindow(QMainWindow):
         layout.setSpacing(16)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
+        # ── Top header row (title block + queue toggle button) ──
+        header_row = QHBoxLayout()
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
         title = QLabel("Transcription Home")
         title.setObjectName("page-title")
-        title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         subtitle = QLabel("Upload audio files for transcription and translation")
         subtitle.setObjectName("page-sub")
-        subtitle.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+
+        self._queue_btn = QPushButton("⊞  Queue")
+        self._queue_btn.setObjectName("add-btn")
+        self._queue_btn.setFixedWidth(100)
+        self._queue_btn.setCheckable(True)
+        self._queue_btn.clicked.connect(self._toggle_right_panel)
+
+        header_row.addLayout(title_col)
+        header_row.addStretch()
+        header_row.addWidget(self._queue_btn, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(header_row)
 
         layout.addWidget(DropZone(on_files_dropped=self.add_files_to_table))
 
@@ -217,7 +232,6 @@ class MainWindow(QMainWindow):
         add_btn.setFixedWidth(130)
         add_btn.clicked.connect(self.open_files_dialog)
         layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignCenter)
-        # Add a bit of vertical breathing room before the table
         layout.addSpacing(12)
 
         layout.addWidget(self._build_table())
@@ -233,7 +247,6 @@ class MainWindow(QMainWindow):
 
     def _build_table(self) -> QTableWidget:
         self.table = QTableWidget(0, 3)
-        # Columns: 0 = Duration, 1 = Filename (center), 2 = Status
         self.table.setHorizontalHeaderLabels(["Duration", "Filename", "Status"])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
@@ -242,7 +255,6 @@ class MainWindow(QMainWindow):
         self.table.setMinimumHeight(200)
 
         hdr = self.table.horizontalHeader()
-        # Make all three columns share available width equally
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
@@ -280,7 +292,6 @@ class MainWindow(QMainWindow):
         self.log_box.setObjectName("log-box")
         self.log_box.setReadOnly(True)
         self.log_box.setPlainText("")
-        # Slightly increase log output text size for readability
         font = self.log_box.font()
         if font.pointSize() > 0:
             font.setPointSize(font.pointSize() + 2)
@@ -289,16 +300,23 @@ class MainWindow(QMainWindow):
 
         return right
 
+    # ── Toggle right panel ────────────────────────────────────────────────────
+    def _toggle_right_panel(self):
+        if self._right_panel.isVisible():
+            self._right_panel.hide()
+            self._queue_btn.setChecked(False)
+        else:
+            self._right_panel.show()
+            self._queue_btn.setChecked(True)
+
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _append_table_row(self, fname: str, duration: str, status: str, full_path: str | None = None):
         row = self.table.rowCount()
         self.table.insertRow(row)
-        # Duration in left column (0)
         dur_item = QTableWidgetItem(duration)
         dur_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 0, dur_item)
 
-        # Filename in center column (1)
         item = QTableWidgetItem(fname)
         item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         if full_path:
@@ -327,7 +345,6 @@ class MainWindow(QMainWindow):
             self.add_files_to_table(files)
 
     def open_job_options(self):
-        # Require at least one row selected before starting a job
         selected_ranges = self.table.selectedRanges()
         if not selected_ranges:
             self.log_box.append("[warn] Select a file in the table before starting a job.\n")
@@ -339,9 +356,7 @@ class MainWindow(QMainWindow):
             translation = dialog.translation_combo.currentText()
             timestamps = dialog.timestamps_combo.currentText()
 
-            # Run the job for the first selected row
             selected_row = selected_ranges[0].topRow()
-            # Filename is stored in column 1 (center)
             item = self.table.item(selected_row, 1)
             fname = item.text()
             full_path = item.data(Qt.ItemDataRole.UserRole) or fname
@@ -359,7 +374,7 @@ class MainWindow(QMainWindow):
                 self.log_box.append("[warn] A job is already running. Wait for it to finish.\n")
                 return
 
-            python = sys.executable
+            python = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
             self._job_process = QProcess(self)
             self._current_job_card = job_card
             self._current_fname = fname
