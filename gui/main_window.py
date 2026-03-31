@@ -3,7 +3,7 @@ import sys
 import time
 import keyring
 from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer
-from PySide6.QtGui import QColor, QPainter, QDesktopServices, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,8 +22,6 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
-    QStyle,
-    QStyledItemDelegate,
     QTableWidgetSelectionRange,
     QTableWidget,
     QTableWidgetItem,
@@ -104,23 +102,6 @@ STATUS_COLORS = {
     "Complete":   "#22c55e",
     "Error":      "#ef4444",
 }
-
-
-class StatusColumnDelegate(QStyledItemDelegate):
-    """Paints the Status column text in the correct color (e.g. green for Complete)."""
-
-    def paint(self, painter: QPainter, option, index):
-        text = index.data(Qt.ItemDataRole.DisplayRole) or ""
-        color_hex = STATUS_COLORS.get(text, "#94a3b8")
-        if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, option.palette.highlight())
-        # Keep status hue when selected (do not use highlightedText — it forces white)
-        painter.setPen(QColor(color_hex))
-        painter.drawText(
-            option.rect,
-            Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-            text,
-        )
 
 # ── Sample data ───────────────────────────────────────────────────────────────
 
@@ -452,21 +433,23 @@ class MainWindow(QMainWindow):
         section.setObjectName("section-title")
         card_layout.addWidget(section)
 
-        self.jobs_table = QTableWidget(0, 4)
+        self.jobs_table = QTableWidget(0, 5)
         self.jobs_table.setObjectName("jobs-table")
-        self.jobs_table.setHorizontalHeaderLabels(["Filename", "Status", "Output folder", "Opened"])
+        self.jobs_table.setHorizontalHeaderLabels(
+            ["Duration", "Filename", "Status", "Output folder", "Opened"]
+        )
         self.jobs_table.verticalHeader().setVisible(False)
         self.jobs_table.setShowGrid(False)
         self.jobs_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.jobs_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.jobs_table.setMinimumHeight(200)
         hdr = self.jobs_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        self.jobs_table.setItemDelegateForColumn(1, StatusColumnDelegate(self.jobs_table))
         card_layout.addWidget(self.jobs_table)
 
         layout.addWidget(card)
@@ -867,6 +850,38 @@ class MainWindow(QMainWindow):
         except Exception:
             return ""
 
+    def _jobs_table_row_for_current_job(self) -> int | None:
+        """Jobs table row index for _current_fname / _current_full_path (same order as _jobs[:50])."""
+        if self._current_fname is None:
+            return None
+        if not hasattr(self, "jobs_table"):
+            return None
+        tgt = self._canonical_file_path(self._current_full_path or "")
+        for i, rec in enumerate(self._jobs[:50]):
+            if rec.get("fname") != self._current_fname:
+                continue
+            rfp = self._canonical_file_path((rec.get("full_path") or "").strip())
+            if tgt and rfp:
+                if rfp == tgt:
+                    return i
+            elif not tgt and not rfp:
+                return i
+            elif tgt and not rfp:
+                return i
+            elif not tgt and rfp:
+                return i
+        return None
+
+    def _sync_jobs_status_cell_for_current_job(self, status: str, pct: int) -> None:
+        """Mirror Home status + progress on the Jobs table for the active job."""
+        row = self._jobs_table_row_for_current_job()
+        if row is None:
+            return
+        w = self.jobs_table.cellWidget(row, 2)
+        if w is None:
+            return
+        self._apply_home_status_bar_style(w, status, pct)
+
     def _reset_home_row_for_new_job(self, row: int) -> None:
         """Clear stale Complete/Error UI and log before launching a new run for this row."""
         self._stop_estimated_progress()
@@ -969,6 +984,19 @@ class MainWindow(QMainWindow):
         outer_layout.addLayout(name_row)
         outer_layout.addWidget(log_edit)
         return outer
+
+    def _build_jobs_filename_cell(self, fname: str) -> QWidget:
+        """Filename column for Jobs: same bold label as Home, without expand/log."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.setSpacing(0)
+        lab = QLabel(fname)
+        lab.setWordWrap(False)
+        lab.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lab.setStyleSheet("font-weight: 600;")
+        lay.addWidget(lab, alignment=Qt.AlignmentFlag.AlignCenter)
+        return w
 
     def _build_home_status_cell(self, status: str) -> QWidget:
         sw = QWidget()
@@ -1190,6 +1218,7 @@ class MainWindow(QMainWindow):
         col2 = self.table.cellWidget(row, 2)
         if col2 is not None:
             self._apply_home_status_bar_style(col2, "Processing", int(self._estimated_progress_pct))
+        self._sync_jobs_status_cell_for_current_job("Processing", int(self._estimated_progress_pct))
         self._progress_timer.start()
 
     def _on_estimated_progress_tick(self):
@@ -1208,6 +1237,7 @@ class MainWindow(QMainWindow):
         self._estimated_progress_pct += max(0.04, gap * 0.0065)
         self._estimated_progress_pct = min(self._estimated_progress_pct, cap)
         self._apply_home_status_bar_style(col2, "Processing", int(self._estimated_progress_pct))
+        self._sync_jobs_status_cell_for_current_job("Processing", int(self._estimated_progress_pct))
 
     def _on_job_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         self._stop_estimated_progress()
@@ -1238,6 +1268,7 @@ class MainWindow(QMainWindow):
         rec = {
             "fname": fname,
             "full_path": full_path,
+            "duration": _get_audio_duration(full_path),
             "status": status,
             "output_folder": "",
             "opened": "",
@@ -1277,18 +1308,33 @@ class MainWindow(QMainWindow):
         for rec in self._jobs[:50]:
             row = self.jobs_table.rowCount()
             self.jobs_table.insertRow(row)
-            fname_item = QTableWidgetItem(rec.get("fname", ""))
-            fname_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-            self.jobs_table.setItem(row, 0, fname_item)
+
+            fp = (rec.get("full_path") or "").strip()
+            dur = rec.get("duration")
+            if dur is None or dur == "":
+                dur = _get_audio_duration(fp) if fp else "—"
+            else:
+                dur = str(dur)
+            dur_item = QTableWidgetItem(dur)
+            dur_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.jobs_table.setItem(row, 0, dur_item)
+
+            self.jobs_table.setCellWidget(row, 1, self._build_jobs_filename_cell(rec.get("fname", "")))
 
             status_text = rec.get("status", "")
-            status_item = QTableWidgetItem(status_text)
-            status_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-            status_item.setForeground(QColor(STATUS_COLORS.get(status_text, "#94a3b8")))
-            self.jobs_table.setItem(row, 1, status_item)
-            self.jobs_table.setItem(row, 2, QTableWidgetItem(rec.get("output_folder", "")))
-            self.jobs_table.setItem(row, 3, QTableWidgetItem(rec.get("opened", "")))
-            self.jobs_table.setRowHeight(row, 42)
+            self.jobs_table.setCellWidget(row, 2, self._build_home_status_cell(status_text))
+
+            out_item = QTableWidgetItem(rec.get("output_folder", ""))
+            out_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
+            self.jobs_table.setItem(row, 3, out_item)
+
+            opened_item = QTableWidgetItem(rec.get("opened", ""))
+            opened_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+            self.jobs_table.setItem(row, 4, opened_item)
+
+            self.jobs_table.setRowHeight(row, HOME_TABLE_ROW_MIN_H)
 
     def _safe_read_text(self, path: str, limit_chars: int = 20000) -> str:
         try:
@@ -1466,5 +1512,6 @@ class MainWindow(QMainWindow):
         col2 = self.table.cellWidget(row, 2)
         if col2 is not None:
             self._apply_home_status_bar_style(col2, status, pct)
+        self._sync_jobs_status_cell_for_current_job(status, pct)
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
