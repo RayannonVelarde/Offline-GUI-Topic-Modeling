@@ -2,7 +2,7 @@ import os
 import sys
 import time
 import keyring
-from PySide6.QtCore import Qt, QProcess, QSettings, QUrl, QSize, QTimer, QProcessEnvironment
+from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer
 from PySide6.QtGui import QColor, QPainter, QDesktopServices, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QProgressBar,
+    QSizePolicy,
     QPushButton,
     QSpinBox,
     QSplitter,
@@ -26,12 +28,13 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QFileDialog,
 )
 
-from widgets import JobCard, DropZone
+from widgets import DropZone
 from stylesheet import THEME_DARK, THEME_LIGHT, get_stylesheet
 from nav_icons import make_nav_icon
 
@@ -55,6 +58,11 @@ KEY_AUTO_OPEN_OUTPUT = "jobs/auto_open_output_folder"
 
 OUTPUT_SPANISH_BASENAME = "transcription_spanish.txt"
 OUTPUT_ENGLISH_BASENAME = "transcription_english.txt"
+
+# Home file table viewport: medium default, grow with real row/widget heights, cap then scroll.
+HOME_TABLE_MIN_H = 260
+HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
+HOME_TABLE_ROW_MIN_H = 52
 
 
 def _format_duration(seconds: float) -> str:
@@ -218,16 +226,20 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Offline Transcription App")
         self._job_process = None
-        self._current_job_card = None
+        self._job_log_path: str | None = None
         self._current_full_path = None
         self._nav_buttons: dict[str, QPushButton] = {}
         self._current_page = "home"
         self._theme = THEME_LIGHT
         self._jobs: list[dict] = []
         self._review_items: list[dict] = []
-        self._queue_open = False
-        self._queue_panel_width = 280
-        self._queue_splitter_block_signal = False
+        self._current_job_row: int | None = None
+        self._current_fname: str | None = None
+        self._estimated_progress_pct: float = 0.0
+        self._estimated_progress_row: int | None = None
+        self._progress_timer = QTimer(self)
+        self._progress_timer.setInterval(110)
+        self._progress_timer.timeout.connect(self._on_estimated_progress_tick)
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -236,33 +248,15 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(0)
 
         root_layout.addWidget(self._build_sidebar(), stretch=0)
-
-        # Center + queue share one horizontal splitter so opening the queue resizes
-        # content predictably (no overlay, no extra root column fighting min-width).
-        self._queue_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._queue_splitter.setObjectName("queue-splitter")
-        self._queue_splitter.setChildrenCollapsible(False)
-        self._queue_splitter.setCollapsible(0, False)
-        self._queue_splitter.setCollapsible(1, True)
-        self._queue_splitter.setHandleWidth(5)
-        self._queue_splitter.setStretchFactor(0, 1)
-        self._queue_splitter.setStretchFactor(1, 0)
-
-        center = self._build_center()
-        self._right_panel = self._build_right_panel()
-        self._right_panel.setMinimumWidth(0)
-        self._right_panel.setMaximumWidth(self._queue_panel_width)
-
-        self._queue_splitter.addWidget(center)
-        self._queue_splitter.addWidget(self._right_panel)
-        self._queue_splitter.splitterMoved.connect(self._on_queue_splitter_moved)
-
-        root_layout.addWidget(self._queue_splitter, stretch=1)
-
-        QTimer.singleShot(0, self._sync_queue_splitter_sizes)
+        root_layout.addWidget(self._build_center(), stretch=1)
 
         # Apply persisted theme (LIGHT by default)
         self.apply_theme(self._settings().value(KEY_THEME, THEME_LIGHT))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "_current_page", "") == "home" and hasattr(self, "table"):
+            QTimer.singleShot(0, self._sync_home_table_height)
 
     def _settings(self) -> QSettings:
         return QSettings(SETTINGS_ORG, SETTINGS_APP)
@@ -286,56 +280,6 @@ class MainWindow(QMainWindow):
             color = active if pid == self._current_page else inactive
             btn.setIcon(make_nav_icon(pid, size=icon_sz, color_hex=color))
             btn.setIconSize(QSize(icon_sz, icon_sz))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self._queue_open:
-            self._sync_queue_splitter_sizes()
-
-    def _sync_queue_splitter_sizes(self):
-        """Keep queue width stable when open; collapse to 0 when closed."""
-        if not hasattr(self, "_queue_splitter"):
-            return
-        sp = self._queue_splitter
-        total = sp.width()
-        if total < 2:
-            return
-        self._queue_splitter_block_signal = True
-        try:
-            if self._queue_open:
-                min_center = 280
-                rw = self._queue_panel_width
-                if total - rw < min_center:
-                    rw = max(0, total - min_center)
-                if rw < 48:
-                    self._queue_open = False
-                    if hasattr(self, "_queue_btn"):
-                        self._queue_btn.setChecked(False)
-                    sp.setSizes([total, 0])
-                    return
-                lw = total - rw
-                sp.setSizes([lw, rw])
-                self._right_panel.setMaximumWidth(self._queue_panel_width)
-            else:
-                sp.setSizes([total, 0])
-        finally:
-            self._queue_splitter_block_signal = False
-
-    def _on_queue_splitter_moved(self, _pos: int, index: int):
-        """Keep Queue toggle in sync when the user drags the splitter closed/open."""
-        _ = index
-        if self._queue_splitter_block_signal:
-            return
-        sp = self._queue_splitter
-        sizes = sp.sizes()
-        if len(sizes) < 2:
-            return
-        if sizes[1] < 20:
-            self._queue_open = False
-            self._queue_btn.setChecked(False)
-        else:
-            self._queue_open = True
-            self._queue_btn.setChecked(True)
 
     def _get_output_folder(self) -> str:
         """Return output folder; create a sensible default if unset."""
@@ -401,14 +345,6 @@ class MainWindow(QMainWindow):
         page = page if page in ("home", "jobs", "review", "settings") else "home"
         self._current_page = page
 
-        # Queue panel is only for Home; close when navigating away.
-        if page != "home" and getattr(self, "_queue_open", False):
-            self._queue_open = False
-            if hasattr(self, "_queue_btn"):
-                self._queue_btn.setChecked(False)
-            if hasattr(self, "_queue_splitter"):
-                self._sync_queue_splitter_sizes()
-
         if page == "settings":
             self._set_active_nav("settings")
             self._pages.setCurrentWidget(self._settings_page)
@@ -448,37 +384,19 @@ class MainWindow(QMainWindow):
 
     def _build_home_page(self) -> QFrame:
         home = QFrame()
+        self._home_page = home
         home.setObjectName("home-page")
         layout = QVBoxLayout(home)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
-        # AlignTop only: AlignHCenter was shrinking rows to minimum width and centering
-        # them, so the header/Queue row did not track the real center width when the
-        # queue panel toggled (maximized vs narrow).
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # ── Top header row (title block + queue toggle button) ──
-        header_row = QHBoxLayout()
-
-        title_col = QVBoxLayout()
-        title_col.setSpacing(2)
         title = QLabel("Transcription Home")
         title.setObjectName("page-title")
         subtitle = QLabel("Upload audio files for transcription and translation")
         subtitle.setObjectName("page-sub")
-        title_col.addWidget(title)
-        title_col.addWidget(subtitle)
-
-        self._queue_btn = QPushButton("⊞  Queue")
-        self._queue_btn.setObjectName("add-btn")
-        self._queue_btn.setFixedWidth(100)
-        self._queue_btn.setCheckable(True)
-        self._queue_btn.clicked.connect(self._toggle_right_panel)
-
-        header_row.addLayout(title_col)
-        header_row.addStretch()
-        header_row.addWidget(self._queue_btn, alignment=Qt.AlignmentFlag.AlignTop)
-        layout.addLayout(header_row)
+        layout.addWidget(title)
+        layout.addWidget(subtitle)
 
         layout.addWidget(DropZone(on_files_dropped=self.add_files_to_table))
 
@@ -499,6 +417,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_table())
 
         start_btn = QPushButton("▶  Start Job")
+        self._home_start_btn = start_btn
         start_btn.setObjectName("start-btn")
         start_btn.setFixedWidth(130)
         start_btn.clicked.connect(self.open_job_options)
@@ -856,15 +775,13 @@ class MainWindow(QMainWindow):
         self.table.setShowGrid(False)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setMinimumHeight(150)
+        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-
-        self.table.setItemDelegateForColumn(2, StatusColumnDelegate(self.table))
 
         # Hide home warning once the user makes a valid selection.
         self.table.itemSelectionChanged.connect(self._on_home_selection_changed)
@@ -872,45 +789,209 @@ class MainWindow(QMainWindow):
         for fname, dur, status in SAMPLE_FILES:
             self._append_table_row(fname, dur, status)
 
+        QTimer.singleShot(0, self._sync_home_table_height)
         return self.table
 
-    # ── Right panel ───────────────────────────────────────────────────────────
-    def _build_right_panel(self) -> QFrame:
-        right = QFrame()
-        right.setObjectName("right-panel")
-        layout = QVBoxLayout(right)
-        layout.setContentsMargins(16, 24, 16, 16)
-        layout.setSpacing(12)
+    def _effective_home_table_max_height(self) -> int:
+        """Max table height: fill space down to Start Job when possible, then absolute cap."""
+        t = getattr(self, "table", None)
+        hp = getattr(self, "_home_page", None)
+        if hp is None and t is not None:
+            hp = t.parentWidget()
+        if hp is None or t is None:
+            return HOME_TABLE_ABSOLUTE_MAX_PX
+        layout = hp.layout()
+        sp = layout.spacing() if layout else 16
+        hp.updateGeometry()
+        t.updateGeometry()
+        pos = t.mapTo(hp, QPoint(0, 0))
+        start_h = 48
+        sb = getattr(self, "_home_start_btn", None)
+        if sb is not None:
+            sb.adjustSize()
+            start_h = max(sb.sizeHint().height(), sb.height(), 40)
+        # Room for table if bottom stretch goes to 0: hp height = table_top + table_h + sp + start + stretch
+        avail = hp.height() - pos.y() - sp - start_h
+        avail = max(int(avail), HOME_TABLE_MIN_H)
+        return min(HOME_TABLE_ABSOLUTE_MAX_PX, avail)
 
-        queue_title = QLabel("PROCESSING QUEUE")
-        queue_title.setObjectName("section-title")
-        layout.addWidget(queue_title)
-
-        self.jobs_layout = QVBoxLayout()
-        layout.addLayout(self.jobs_layout)
-
-        layout.addSpacing(8)
-
-        log_title = QLabel("  LOG OUTPUT")
-        log_title.setObjectName("section-title")
-        layout.addWidget(log_title)
-
-        self.log_box = QTextEdit()
-        self.log_box.setObjectName("log-box")
-        self.log_box.setReadOnly(True)
-        self.log_box.setPlainText("")
-        font = self.log_box.font()
-        if font.pointSize() > 0:
-            font.setPointSize(font.pointSize() + 2)
-            self.log_box.setFont(font)
-        layout.addWidget(self.log_box, stretch=1)
-
-        return right
-
-    def _append_log(self, text: str):
-        if not hasattr(self, "log_box") or self.log_box is None:
+    def _sync_home_table_height(self) -> None:
+        """Size the Home table from actual header + row heights (after resizeRowToContents), clamp, then scroll."""
+        if not hasattr(self, "table"):
             return
+        t = self.table
+        for r in range(t.rowCount()):
+            t.resizeRowToContents(r)
+            if t.rowHeight(r) < HOME_TABLE_ROW_MIN_H:
+                t.setRowHeight(r, HOME_TABLE_ROW_MIN_H)
+        t.updateGeometry()
+        hdr = t.horizontalHeader()
+        h_hdr = hdr.height() if hdr.height() > 0 else 34
+        body = sum(t.rowHeight(r) for r in range(t.rowCount()))
+        desired = h_hdr + body + 6
+        eff_max = self._effective_home_table_max_height()
+        h = min(max(desired, HOME_TABLE_MIN_H), eff_max)
+        t.setFixedHeight(h)
 
+    def _row_for_col1_widget(self, col1: QWidget) -> int:
+        for r in range(self.table.rowCount()):
+            if self.table.cellWidget(r, 1) is col1:
+                return r
+        return -1
+
+    def _path_for_row(self, row: int) -> str:
+        w = self.table.cellWidget(row, 1)
+        if w is None:
+            return ""
+        return getattr(w, "_path_key", "") or ""
+
+    def _filename_for_row(self, row: int) -> str:
+        w = self.table.cellWidget(row, 1)
+        if w is None:
+            return ""
+        return getattr(w, "_fname", "") or ""
+
+    def _find_log_edit_for_path(self, path_key: str) -> QTextEdit | None:
+        for r in range(self.table.rowCount()):
+            w = self.table.cellWidget(r, 1)
+            if w is not None and getattr(w, "_path_key", "") == path_key:
+                return getattr(w, "_log_edit", None)
+        return None
+
+    @staticmethod
+    def _canonical_file_path(p: str) -> str:
+        if not (p or "").strip():
+            return ""
+        try:
+            return os.path.normcase(os.path.normpath(os.path.abspath(p.strip())))
+        except Exception:
+            return ""
+
+    def _reset_home_row_for_new_job(self, row: int) -> None:
+        """Clear stale Complete/Error UI and log before launching a new run for this row."""
+        self._stop_estimated_progress()
+        w = self.table.cellWidget(row, 1)
+        if w is not None:
+            edit = getattr(w, "_log_edit", None)
+            if edit is not None:
+                edit.clear()
+        self._update_table_row_status(row, "Processing", pct=0)
+
+    def _remove_existing_job_records_for_file(self, full_path: str) -> None:
+        """Drop prior Jobs-page entries for the same file so reruns don't duplicate or confuse updates."""
+        tgt = self._canonical_file_path(full_path)
+        if not tgt:
+            return
+        kept: list[dict] = []
+        for r in self._jobs:
+            rfp = (r.get("full_path") or "").strip()
+            if rfp and self._canonical_file_path(rfp) == tgt:
+                continue
+            kept.append(r)
+        self._jobs = kept
+
+    def _toggle_log_visibility(self, col1_widget: QWidget, expanded: bool):
+        log_edit = getattr(col1_widget, "_log_edit", None)
+        expand_btn = getattr(col1_widget, "_expand_btn", None)
+        if log_edit is None:
+            return
+        log_edit.setVisible(expanded)
+        if expand_btn is not None:
+            expand_btn.setText("▼" if expanded else "▶")
+        self._sync_home_table_height()
+        QTimer.singleShot(0, self._sync_home_table_height)
+
+    def _apply_home_status_bar_style(self, col2: QWidget, status: str, pct: int):
+        st_lbl = getattr(col2, "_status_lbl", None)
+        bar = getattr(col2, "_progress_bar", None)
+        if st_lbl is not None:
+            st_lbl.setText(status)
+            st_lbl.setStyleSheet(f"color: {STATUS_COLORS.get(status, '#94a3b8')};")
+        if bar is None:
+            return
+        bar.setValue(max(0, min(100, pct)))
+        if status == "Complete" and pct >= 100:
+            bar.setObjectName("complete")
+        elif status == "Error":
+            bar.setObjectName("error")
+        else:
+            bar.setObjectName("")
+        bar.style().unpolish(bar)
+        bar.style().polish(bar)
+        bar.update()
+
+    def _build_home_filename_cell(self, fname: str, path_key: str) -> QWidget:
+        outer = QWidget()
+        outer._path_key = path_key  # type: ignore[attr-defined]
+        outer._fname = fname  # type: ignore[attr-defined]
+        outer_layout = QVBoxLayout(outer)
+        outer_layout.setContentsMargins(4, 4, 4, 4)
+        outer_layout.setSpacing(4)
+
+        expand_btn = QToolButton()
+        expand_btn.setCheckable(True)
+        expand_btn.setText("▶")
+        expand_btn.setFixedSize(26, 26)
+        expand_btn.setToolTip("Show or hide log for this file")
+        fn_lab = QLabel(fname)
+        fn_lab.setWordWrap(False)
+        fn_lab.setStyleSheet("font-weight: 600;")
+        name_inner = QHBoxLayout()
+        name_inner.setSpacing(6)
+        name_inner.setContentsMargins(0, 0, 0, 0)
+        name_inner.addWidget(expand_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
+        name_inner.addWidget(fn_lab, alignment=Qt.AlignmentFlag.AlignVCenter)
+        name_block = QWidget()
+        name_block.setLayout(name_inner)
+
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.addStretch(1)
+        name_row.addWidget(name_block, alignment=Qt.AlignmentFlag.AlignCenter)
+        name_row.addStretch(1)
+
+        log_edit = QTextEdit()
+        log_edit.setObjectName("home-file-log")
+        log_edit.setReadOnly(True)
+        log_edit.setPlainText("")
+        log_edit.hide()
+        log_edit.setMinimumHeight(120)
+        log_edit.setMaximumHeight(200)
+        font = log_edit.font()
+        if font.pointSize() > 0:
+            font.setPointSize(font.pointSize() + 1)
+        log_edit.setFont(font)
+
+        outer._log_edit = log_edit  # type: ignore[attr-defined]
+        outer._expand_btn = expand_btn  # type: ignore[attr-defined]
+        expand_btn.toggled.connect(lambda on, o=outer: self._toggle_log_visibility(o, on))
+
+        outer_layout.addLayout(name_row)
+        outer_layout.addWidget(log_edit)
+        return outer
+
+    def _build_home_status_cell(self, status: str) -> QWidget:
+        sw = QWidget()
+        vl = QVBoxLayout(sw)
+        vl.setContentsMargins(6, 4, 6, 4)
+        vl.setSpacing(6)
+        st_lbl = QLabel(status)
+        st_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        bar = QProgressBar()
+        bar.setMaximum(100)
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setTextVisible(False)
+        bar.setFixedHeight(5)
+        vl.addWidget(st_lbl)
+        vl.addWidget(bar)
+        sw._status_lbl = st_lbl  # type: ignore[attr-defined]
+        sw._progress_bar = bar  # type: ignore[attr-defined]
+        pct = 100 if status == "Complete" else 0
+        self._apply_home_status_bar_style(sw, status, pct)
+        return sw
+
+    def _append_colored_line_to_edit(self, edit: QTextEdit, text: str):
         line = text.rstrip("\n")
         lower = line.lower()
         if "[job] completed job" in lower:
@@ -920,44 +1001,47 @@ class MainWindow(QMainWindow):
         else:
             color = "#ffffff" if self._theme == THEME_DARK else "#000000"
 
-        cur = self.log_box.textCursor()
+        cur = edit.textCursor()
         cur.movePosition(QTextCursor.MoveOperation.End)
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(color))
         cur.insertText(line + "\n", fmt)
-        self.log_box.setTextCursor(cur)
-        self.log_box.ensureCursorVisible()
+        edit.setTextCursor(cur)
+        edit.ensureCursorVisible()
 
-    # ── Toggle right panel ────────────────────────────────────────────────────
-    def _toggle_right_panel(self):
-        self._queue_open = not self._queue_open
-        self._queue_btn.setChecked(self._queue_open)
-        self._sync_queue_splitter_sizes()
+    def _append_log(self, text: str, target_path: str | None = None):
+        path = target_path if target_path is not None else self._job_log_path
+        if not path:
+            return
+        edit = self._find_log_edit_for_path(path)
+        if edit is None:
+            return
+        self._append_colored_line_to_edit(edit, text)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
     def _append_table_row(self, fname: str, duration: str, status: str, full_path: str | None = None):
         row = self.table.rowCount()
         self.table.insertRow(row)
+        path_key = full_path.strip() if full_path else fname
+
         dur_item = QTableWidgetItem(duration)
         dur_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         self.table.setItem(row, 0, dur_item)
 
-        item = QTableWidgetItem(fname)
-        item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        if full_path:
-            item.setData(Qt.ItemDataRole.UserRole, full_path)
-        self.table.setItem(row, 1, item)
-        status_item = QTableWidgetItem(status)
-        status_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-        status_item.setForeground(QColor(STATUS_COLORS.get(status, "#94a3b8")))
-        self.table.setItem(row, 2, status_item)
-        self.table.setRowHeight(row, 48)
+        col1 = self._build_home_filename_cell(fname, path_key)
+        self.table.setCellWidget(row, 1, col1)
+
+        col2 = self._build_home_status_cell(status)
+        self.table.setCellWidget(row, 2, col2)
+
+        self._sync_home_table_height()
+        QTimer.singleShot(0, self._sync_home_table_height)
 
     def add_files_to_table(self, files: list[str]):
         for path in files:
             duration = _get_audio_duration(path)
             self._append_table_row(os.path.basename(path), duration, "Pending", full_path=path)
-            self._append_log(f"[+] Added file: {os.path.basename(path)}")
+            self._append_log(f"[+] Added file: {os.path.basename(path)}", target_path=path)
 
     def open_files_dialog(self):
         start_dir = self._settings().value(KEY_OUTPUT_FOLDER, "")
@@ -983,7 +1067,6 @@ class MainWindow(QMainWindow):
     def open_job_options(self):
         selected_ranges = self.table.selectedRanges()
         if not selected_ranges:
-            self._append_log("[warn] Select a file in the table before starting a job.")
             self._show_home_warning(True)
             return
 
@@ -1000,73 +1083,82 @@ class MainWindow(QMainWindow):
         else:
             dialog.timestamps_combo.setCurrentText("No timestamps")
 
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            diarize = dialog.diarization_checkbox.isChecked()
-            num_speakers = dialog.speaker_count_spin.value()
-            translation = dialog.translation_combo.currentText()
-            timestamps = dialog.timestamps_combo.currentText()
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
 
-            # Require a Hugging Face token for jobs that need it.
-            token = self._get_hf_token()
-            if not token:
-                self._append_log("[warn] Hugging Face token is missing. Add it in Settings before starting this job.")
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(
-                    self,
-                    "Token required",
-                    "A valid Hugging Face token is required.\n\n"
-                    "Open the Settings page and add your token in the Hugging Face token field.",
-                )
-                return
+        selected_row = selected_ranges[0].topRow()
+        fname = self._filename_for_row(selected_row)
+        full_path = self._path_for_row(selected_row) or fname
+        path_key = full_path
 
-            # Only allow one active job process at a time.
-            if self._job_process is not None and self._job_process.state() != QProcess.ProcessState.NotRunning:
-                self._append_log("[warn] A job is already running. Wait for it to finish.")
-                return
+        diarize = dialog.diarization_checkbox.isChecked()
+        num_speakers = dialog.speaker_count_spin.value()
+        translation = dialog.translation_combo.currentText()
+        timestamps = dialog.timestamps_combo.currentText()
 
-            selected_row = selected_ranges[0].topRow()
-            item = self.table.item(selected_row, 1)
-            fname = item.text()
-            full_path = item.data(Qt.ItemDataRole.UserRole) or fname
-            self._current_full_path = full_path
-
-            job_card = JobCard(fname, "Processing...", 0)
-            self.jobs_layout.addWidget(job_card)
-            self._add_job_record(fname=fname, full_path=full_path, status="Processing")
-
+        # Require a Hugging Face token for jobs that need it.
+        token = self._get_hf_token()
+        if not token:
             self._append_log(
-                f"[job] Starting job for {fname} "
-                f"(translation='{translation}', diarization={diarize}, "
-                f"num_speakers={num_speakers}, timestamps='{timestamps}')"
+                "[warn] Hugging Face token is missing. Add it in Settings before starting this job.",
+                target_path=path_key,
             )
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self,
+                "Token required",
+                "A valid Hugging Face token is required.\n\n"
+                "Open the Settings page and add your token in the Hugging Face token field.",
+            )
+            return
 
-            python = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
-            self._job_process = QProcess(self)
-            self._current_job_card = job_card
-            self._current_fname = fname
-            self._current_job_row = selected_row
+        # Only allow one active job process at a time.
+        if self._job_process is not None and self._job_process.state() != QProcess.ProcessState.NotRunning:
+            if self._job_log_path:
+                self._append_log(
+                    "[warn] A job is already running. Wait for it to finish.",
+                    target_path=self._job_log_path,
+                )
+            return
 
-            self._job_process.readyReadStandardOutput.connect(self._on_job_stdout)
-            self._job_process.readyReadStandardError.connect(self._on_job_stderr)
-            self._job_process.finished.connect(self._on_job_finished)
+        self._current_full_path = full_path
 
-            self._job_process.setWorkingDirectory(SCRIPT_DIR)
+        self._reset_home_row_for_new_job(selected_row)
+        self._add_job_record(fname=fname, full_path=full_path, status="Processing")
 
-            # Pass Hugging Face token via environment only; never log or write it to disk.
-            env = QProcessEnvironment.systemEnvironment()
-            env.insert("HUGGINGFACE_TOKEN", token)
-            self._job_process.setProcessEnvironment(env)
+        self._job_log_path = path_key
+        self._append_log(
+            f"[job] Starting job for {fname} "
+            f"(translation='{translation}', diarization={diarize}, "
+            f"num_speakers={num_speakers}, timestamps='{timestamps}')"
+        )
 
-            self._job_process.start(python, [MIXBOTHTASK_PATH, full_path, str(num_speakers)])
-            if not self._job_process.waitForStarted(5000):
-                self._append_log(f"[error] Failed to start job: {self._job_process.errorString()}")
-                job_card.update_status("Error", 0)
-                self._update_table_row_status(selected_row, "Error")
-                self._job_process = None
-                self._current_job_card = None
-            else:
-                # Reflect real state in the Home table immediately.
-                self._update_table_row_status(selected_row, "Processing")
+        python = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
+        self._job_process = QProcess(self)
+        self._current_fname = fname
+        self._current_job_row = selected_row
+
+        self._job_process.readyReadStandardOutput.connect(self._on_job_stdout)
+        self._job_process.readyReadStandardError.connect(self._on_job_stderr)
+        self._job_process.finished.connect(self._on_job_finished)
+
+        self._job_process.setWorkingDirectory(SCRIPT_DIR)
+
+        # Pass Hugging Face token via environment only; never log or write it to disk.
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("HUGGINGFACE_TOKEN", token)
+        self._job_process.setProcessEnvironment(env)
+
+        self._job_process.start(python, [MIXBOTHTASK_PATH, full_path, str(num_speakers)])
+        if not self._job_process.waitForStarted(5000):
+            self._append_log(f"[error] Failed to start job: {self._job_process.errorString()}")
+            self._update_table_row_status(selected_row, "Error", pct=0)
+            self._job_process = None
+            self._job_log_path = None
+            self._current_job_row = None
+            self._current_fname = None
+        else:
+            self._start_estimated_progress(selected_row)
 
     def _on_job_stdout(self):
         if self._job_process:
@@ -1084,28 +1176,65 @@ class MainWindow(QMainWindow):
                     if ln.strip():
                         self._append_log(ln)
 
+    def _stop_estimated_progress(self):
+        if self._progress_timer.isActive():
+            self._progress_timer.stop()
+        self._estimated_progress_pct = 0.0
+        self._estimated_progress_row = None
+
+    def _start_estimated_progress(self, row: int):
+        """Smooth simulated progress toward ~94% while the subprocess runs."""
+        self._stop_estimated_progress()
+        self._estimated_progress_row = row
+        self._estimated_progress_pct = 5.0
+        col2 = self.table.cellWidget(row, 2)
+        if col2 is not None:
+            self._apply_home_status_bar_style(col2, "Processing", int(self._estimated_progress_pct))
+        self._progress_timer.start()
+
+    def _on_estimated_progress_tick(self):
+        if self._job_process is None or self._current_job_row is None:
+            self._stop_estimated_progress()
+            return
+        row = self._current_job_row
+        if row != self._estimated_progress_row:
+            return
+        col2 = self.table.cellWidget(row, 2)
+        if col2 is None:
+            return
+        # Asymptotic approach: move smoothly toward 94%, never reach 100% until the job finishes.
+        cap = 94.0
+        gap = cap - self._estimated_progress_pct
+        self._estimated_progress_pct += max(0.04, gap * 0.0065)
+        self._estimated_progress_pct = min(self._estimated_progress_pct, cap)
+        self._apply_home_status_bar_style(col2, "Processing", int(self._estimated_progress_pct))
+
     def _on_job_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
-        if self._current_job_card is not None:
+        self._stop_estimated_progress()
+        if self._current_job_row is not None:
             if exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit:
-                self._current_job_card.update_status("Complete", 100)
                 self._append_log(f"[job] Completed job for {self._current_fname}")
-                self._update_table_row_status(self._current_job_row, "Complete")
+                self._update_table_row_status(self._current_job_row, "Complete", pct=100)
                 out = self._archive_latest_outputs_for_job(self._current_full_path or self._current_fname)
                 self._update_job_record(fname=self._current_fname, status="Complete", outputs=out)
+                if hasattr(self, "review_selector"):
+                    self._refresh_review_items()
                 if bool(self._settings().value(KEY_AUTO_OPEN_OUTPUT, False, type=bool)):
                     folder = out.get("folder") if out else self._get_output_folder()
                     if isinstance(folder, str) and folder.strip():
                         QDesktopServices.openUrl(QUrl.fromLocalFile(folder.strip()))
             else:
-                self._current_job_card.update_status("Error", 0)
                 self._append_log(f"[job] Job failed for {self._current_fname} (exit code {exit_code}).")
-                self._update_table_row_status(self._current_job_row, "Error")
+                self._update_table_row_status(self._current_job_row, "Error", pct=0)
                 self._update_job_record(fname=self._current_fname, status="Error", outputs=None)
         self._job_process = None
-        self._current_job_card = None
+        self._job_log_path = None
+        self._current_job_row = None
+        self._current_fname = None
         self._current_full_path = None
 
     def _add_job_record(self, fname: str, full_path: str, status: str):
+        self._remove_existing_job_records_for_file(full_path)
         rec = {
             "fname": fname,
             "full_path": full_path,
@@ -1328,13 +1457,14 @@ class MainWindow(QMainWindow):
         if path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
-    def _update_table_row_status(self, row: int, status: str):
-        """Update the Status column for a table row."""
-        if 0 <= row < self.table.rowCount():
-            status_item = self.table.item(row, 2)
-            if status_item is None:
-                status_item = QTableWidgetItem(status)
-                self.table.setItem(row, 2, status_item)
-            else:
-                status_item.setText(status)
-            status_item.setForeground(QColor(STATUS_COLORS.get(status, "#94a3b8")))
+    def _update_table_row_status(self, row: int, status: str, pct: int | None = None):
+        """Update status label + progress bar for a Home table row."""
+        if not (0 <= row < self.table.rowCount()):
+            return
+        if pct is None:
+            pct = 100 if status == "Complete" else 0
+        col2 = self.table.cellWidget(row, 2)
+        if col2 is not None:
+            self._apply_home_status_bar_style(col2, status, pct)
+        self._sync_home_table_height()
+        QTimer.singleShot(0, self._sync_home_table_height)

@@ -245,14 +245,6 @@ QHeaderView::section {
     background-color: #1d4ed8;
 }
 
-/* ── Right Panel ── */
-#right-panel {
-    background-color: #eef2f7;
-    border-left: 1px solid #d7dee8;
-    min-width: 0;
-    max-width: 300px;
-}
-
 #section-title {
     font-size: 13px;
     font-weight: 700;
@@ -297,6 +289,19 @@ QProgressBar::chunk {
 }
 QProgressBar#complete::chunk {
     background-color: #22c55e;
+}
+QProgressBar#error::chunk {
+    background-color: #ef4444;
+}
+
+#home-file-log {
+    background-color: #ffffff;
+    border: 1px solid #d7dee8;
+    border-radius: 8px;
+    color: #000000;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 11px;
+    padding: 4px;
 }
 
 #log-box {
@@ -560,14 +565,6 @@ QHeaderView::section {
     background-color: #1d4ed8;
 }
 
-/* ── Right Panel ── */
-#right-panel {
-    background-color: #0a0d13;
-    border-left: 1px solid #1e2433;
-    min-width: 0;
-    max-width: 300px;
-}
-
 #section-title {
     font-size: 13px;
     font-weight: 700;
@@ -612,6 +609,19 @@ QProgressBar::chunk {
 }
 QProgressBar#complete::chunk {
     background-color: #22c55e;
+}
+QProgressBar#error::chunk {
+    background-color: #ef4444;
+}
+
+#home-file-log {
+    background-color: #080b10;
+    border: 1px solid #1e2433;
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 11px;
+    padding: 4px;
 }
 
 #log-box {
