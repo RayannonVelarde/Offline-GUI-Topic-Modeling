@@ -5,7 +5,7 @@ A desktop GUI for transcribing and translating audio files offline, built with P
 ## Dependencies
 
 ```bash
-pip install PySide6 mutagen
+pip install PySide6 mutagen keyring
 ```
 
 ## Run

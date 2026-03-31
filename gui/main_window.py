@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import keyring
 from PySide6.QtCore import Qt, QProcess, QSettings, QUrl, QSize, QTimer, QProcessEnvironment
 from PySide6.QtGui import QColor, QPainter, QDesktopServices, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QPushButton,
+    QSpinBox,
     QSplitter,
     QStackedWidget,
     QStyle,
@@ -40,9 +42,13 @@ MIXBOTHTASK_PATH = os.path.join(SCRIPT_DIR, "mixbothtask.py")
 SETTINGS_ORG = "OfflineGUI"
 SETTINGS_APP = "TopicModelingTranscription"
 
+KEYRING_SERVICE = "OfflineGUI"
+KEYRING_HF_USER = "huggingface_token"
+
 KEY_THEME = "ui/theme"
 KEY_OUTPUT_FOLDER = "jobs/output_folder"
 KEY_DEFAULT_DIARIZATION = "jobs/default_diarization"
+KEY_DEFAULT_NUM_SPEAKERS = "jobs/default_num_speakers"
 KEY_DEFAULT_TIMESTAMPS = "jobs/default_timestamps"
 KEY_DEFAULT_TRANSLATION = "jobs/default_translation"
 KEY_AUTO_OPEN_OUTPUT = "jobs/auto_open_output_folder"
@@ -109,16 +115,17 @@ class StatusColumnDelegate(QStyledItemDelegate):
         )
 
 # ── Sample data ───────────────────────────────────────────────────────────────
+
 SAMPLE_FILES = [
-    ("interview_01.mp3",  "12:34",   "Pending"),
-    ("meeting_notes.wav", "45:12",   "Processing"),
-    ("podcast_ep5.m4a",   "1:23:45", "Complete"),
+    #("interview_01.mp3",  "12:34",   "Pending"),
+    #("meeting_notes.wav", "45:12",   "Processing"),
+    #("podcast_ep5.m4a",   "1:23:45", "Complete"),
 ]
 
 SAMPLE_JOBS = [
-    ("interview_01.mp3",  "Transcribing...", 75),
-    ("meeting_notes.wav", "Processing...",   45),
-    ("podcast_ep5.m4a",   "Complete",       100),
+    #("interview_01.mp3",  "Transcribing...", 75),
+    #("meeting_notes.wav", "Processing...",   45),
+    #("podcast_ep5.m4a",   "Complete",       100),
 ]
 
 # (page_id, label) — icons from nav_icons (SVG, consistent stroke style)
@@ -140,6 +147,19 @@ class JobOptionsDialog(QDialog):
         self.diarization_checkbox = QCheckBox("Enable speaker diarization")
         self.diarization_checkbox.setChecked(True)
 
+        spk_row = QHBoxLayout()
+        spk_lbl = QLabel("Number of speakers:")
+        self.speaker_count_spin = QSpinBox()
+        self.speaker_count_spin.setRange(1, 32)
+        self.speaker_count_spin.setValue(2)
+        self.speaker_count_spin.setFixedWidth(72)
+        spk_row.addWidget(spk_lbl)
+        spk_row.addStretch()
+        spk_row.addWidget(self.speaker_count_spin)
+
+        self.diarization_checkbox.toggled.connect(self._sync_speaker_spin_enabled)
+        self._sync_speaker_spin_enabled()
+
         self.translation_combo = QComboBox()
         self.translation_combo.addItems(["None", "Auto → English"])
 
@@ -149,6 +169,7 @@ class JobOptionsDialog(QDialog):
         )
 
         layout.addWidget(self.diarization_checkbox)
+        layout.addLayout(spk_row)
         layout.addWidget(QLabel("Translation:"))
         layout.addWidget(self.translation_combo)
         layout.addWidget(QLabel("Timestamps:"))
@@ -161,6 +182,9 @@ class JobOptionsDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _sync_speaker_spin_enabled(self):
+        self.speaker_count_spin.setEnabled(self.diarization_checkbox.isChecked())
 
 
 class ReviewComparisonPage(QFrame):
@@ -201,7 +225,6 @@ class MainWindow(QMainWindow):
         self._theme = THEME_LIGHT
         self._jobs: list[dict] = []
         self._review_items: list[dict] = []
-        self._hf_token: str = ""
         self._queue_open = False
         self._queue_panel_width = 280
         self._queue_splitter_block_signal = False
@@ -675,10 +698,26 @@ class MainWindow(QMainWindow):
 
         self.default_diarization_checkbox = QCheckBox("Enable speaker diarization by default")
         self.default_diarization_checkbox.setChecked(bool(self._settings().value(KEY_DEFAULT_DIARIZATION, True, type=bool)))
-        self.default_diarization_checkbox.toggled.connect(
-            lambda v: self._settings().setValue(KEY_DEFAULT_DIARIZATION, bool(v))
-        )
+        self.default_diarization_checkbox.toggled.connect(self._on_default_diarization_toggled)
         card_layout.addWidget(self.default_diarization_checkbox)
+
+        def_spk_row = QHBoxLayout()
+        def_spk_label = QLabel("Default number of speakers:")
+        def_spk_label.setObjectName("settings-label")
+        self.default_speaker_spin = QSpinBox()
+        self.default_speaker_spin.setRange(1, 32)
+        self.default_speaker_spin.setValue(
+            max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
+        )
+        self.default_speaker_spin.setFixedWidth(72)
+        self.default_speaker_spin.valueChanged.connect(
+            lambda v: self._settings().setValue(KEY_DEFAULT_NUM_SPEAKERS, int(v))
+        )
+        def_spk_row.addWidget(def_spk_label)
+        def_spk_row.addStretch()
+        def_spk_row.addWidget(self.default_speaker_spin)
+        card_layout.addLayout(def_spk_row)
+        self.default_speaker_spin.setEnabled(self.default_diarization_checkbox.isChecked())
 
         self.default_timestamps_checkbox = QCheckBox("Show timestamps by default (per segment)")
         self.default_timestamps_checkbox.setChecked(bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool)))
@@ -744,18 +783,27 @@ class MainWindow(QMainWindow):
         hf_save_btn.setObjectName("add-btn")
         hf_save_btn.setFixedWidth(72)
         hf_save_btn.clicked.connect(self._save_hf_token_from_field)
+        hf_clear_btn = QPushButton("Clear")
+        hf_clear_btn.setObjectName("add-btn")
+        hf_clear_btn.setFixedWidth(72)
+        hf_clear_btn.clicked.connect(self._clear_hf_token)
         hf_row.addWidget(hf_label)
         hf_row.addWidget(self.hf_token_edit, stretch=1)
         hf_row.addWidget(hf_save_btn)
+        hf_row.addWidget(hf_clear_btn)
         card_layout.addLayout(hf_row)
 
-        hf_note = QLabel("Used only for this session. Not saved to disk.")
+        hf_note = QLabel("Stored securely in your OS keychain.")
         hf_note.setObjectName("settings-label")
         card_layout.addWidget(hf_note)
 
         layout.addWidget(card)
         layout.addStretch()
         return page
+
+    def _on_default_diarization_toggled(self, checked: bool):
+        self._settings().setValue(KEY_DEFAULT_DIARIZATION, bool(checked))
+        self.default_speaker_spin.setEnabled(checked)
 
     def _on_dark_mode_toggled(self, checked: bool):
         self.apply_theme(THEME_DARK if checked else THEME_LIGHT)
@@ -767,16 +815,39 @@ class MainWindow(QMainWindow):
             self.output_folder_edit.setText(folder)
 
     def _load_hf_token_into_field(self):
-        # Token is session-only now; we intentionally do not load from disk.
-        if hasattr(self, "hf_token_edit"):
-            self.hf_token_edit.clear()
+        if not hasattr(self, "hf_token_edit"):
+            return
+        token = self._get_hf_token()
+        self.hf_token_edit.setText(token)
+
+    def _get_hf_token(self) -> str:
+        try:
+            token = keyring.get_password(KEYRING_SERVICE, KEYRING_HF_USER)
+        except Exception:
+            return ""
+        return (token or "").strip()
 
     def _save_hf_token_from_field(self):
         if not hasattr(self, "hf_token_edit"):
             return
         token = (self.hf_token_edit.text() or "").strip()
-        # Keep token only in memory for this session.
-        self._hf_token = token
+        if not token:
+            self._clear_hf_token()
+            return
+        try:
+            keyring.set_password(KEYRING_SERVICE, KEYRING_HF_USER, token)
+        except Exception:
+            # Silent failure; user can retry.
+            return
+
+    def _clear_hf_token(self):
+        if hasattr(self, "hf_token_edit"):
+            self.hf_token_edit.clear()
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_HF_USER)
+        except Exception:
+            # Deleting may fail if nothing was stored; ignore.
+            return
 
     def _build_table(self) -> QTableWidget:
         self.table = QTableWidget(0, 3)
@@ -919,6 +990,10 @@ class MainWindow(QMainWindow):
         dialog = JobOptionsDialog(self)
         # Apply saved defaults to the dialog.
         dialog.diarization_checkbox.setChecked(bool(self._settings().value(KEY_DEFAULT_DIARIZATION, True, type=bool)))
+        dialog.speaker_count_spin.setValue(
+            max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
+        )
+        dialog._sync_speaker_spin_enabled()
         dialog.translation_combo.setCurrentText(self._settings().value(KEY_DEFAULT_TRANSLATION, "None"))
         if bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool)):
             dialog.timestamps_combo.setCurrentText("Per segment")
@@ -927,11 +1002,13 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() == QDialog.DialogCode.Accepted:
             diarize = dialog.diarization_checkbox.isChecked()
+            num_speakers = dialog.speaker_count_spin.value()
             translation = dialog.translation_combo.currentText()
             timestamps = dialog.timestamps_combo.currentText()
 
             # Require a Hugging Face token for jobs that need it.
-            if not getattr(self, "_hf_token", "").strip():
+            token = self._get_hf_token()
+            if not token:
                 self._append_log("[warn] Hugging Face token is missing. Add it in Settings before starting this job.")
                 from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(
@@ -960,7 +1037,7 @@ class MainWindow(QMainWindow):
             self._append_log(
                 f"[job] Starting job for {fname} "
                 f"(translation='{translation}', diarization={diarize}, "
-                f"timestamps='{timestamps}')"
+                f"num_speakers={num_speakers}, timestamps='{timestamps}')"
             )
 
             python = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
@@ -977,11 +1054,10 @@ class MainWindow(QMainWindow):
 
             # Pass Hugging Face token via environment only; never log or write it to disk.
             env = QProcessEnvironment.systemEnvironment()
-            if getattr(self, "_hf_token", "").strip():
-                env.insert("HUGGINGFACE_TOKEN", self._hf_token.strip())
+            env.insert("HUGGINGFACE_TOKEN", token)
             self._job_process.setProcessEnvironment(env)
 
-            self._job_process.start(python, [MIXBOTHTASK_PATH, full_path])
+            self._job_process.start(python, [MIXBOTHTASK_PATH, full_path, str(num_speakers)])
             if not self._job_process.waitForStarted(5000):
                 self._append_log(f"[error] Failed to start job: {self._job_process.errorString()}")
                 job_card.update_status("Error", 0)

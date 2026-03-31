@@ -27,6 +27,14 @@ if your_token is None:
 # --- SETTINGS ---
 # audio_file = "Podcast_4_Interview_with_Quique.mp3"  # <--- Your Spanish audio file here
 audio_file = sys.argv[1]
+num_speakers = 2
+if len(sys.argv) > 2:
+    try:
+        n = int(sys.argv[2])
+        if n >= 1:
+            num_speakers = n
+    except ValueError:
+        pass
 output_txt_spanish = "transcription_spanish.txt"
 output_txt_english = "transcription_english.txt"
 batch_size = 8 #16
@@ -80,7 +88,7 @@ diarize_model.to(torch.device(device))
 # --- PERFORM DIARIZATION ---
 print("Diarizing audio...")
 # audio_dict = {"uri": "audio", "audio": audio_file}
-diarize_segments = diarize_model(audio_file)
+diarize_segments = diarize_model(audio_file, num_speakers=num_speakers)
 
 diarize_list = []
 for turn, _, speaker in diarize_segments.itertracks(yield_label=True):
