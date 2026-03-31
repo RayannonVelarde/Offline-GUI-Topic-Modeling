@@ -14,13 +14,17 @@ if sys.platform == "darwin":
                 break
 
 from PySide6.QtWidgets import QApplication
-from stylesheet import APP_STYLESHEET
+from PySide6.QtCore import QSettings
+from stylesheet import THEME_LIGHT, get_stylesheet
 from main_window import MainWindow
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    app.setStyleSheet(APP_STYLESHEET)
+    # Load persisted theme (LIGHT by default).
+    settings = QSettings("OfflineGUI", "TopicModelingTranscription")
+    theme = settings.value("ui/theme", THEME_LIGHT)
+    app.setStyleSheet(get_stylesheet(theme))
 
     window = MainWindow()
     window.showMaximized()
