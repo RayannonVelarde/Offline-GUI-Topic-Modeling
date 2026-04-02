@@ -232,6 +232,44 @@ QHeaderView::section {
     letter-spacing: 0.5px;
 }
 
+/* Home file table: slightly clearer selection + tighter headers */
+#home-file-table {
+    selection-background-color: #d4e2f7;
+}
+#home-file-table::item:selected {
+    background-color: #d4e2f7;
+    color: #0f172a;
+}
+#home-file-table QHeaderView::section {
+    padding: 9px 12px;
+    letter-spacing: 0.35px;
+}
+#home-file-table QWidget#home-filename-cell[homeRowSelected=true],
+#home-file-table QWidget#home-status-cell[homeRowSelected=true],
+#home-file-table QWidget#home-folder-cell[homeRowSelected=true] {
+    background-color: #d4e2f7;
+    border-radius: 4px;
+}
+#home-file-table QToolButton#home-row-open-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#home-file-table QToolButton#home-row-open-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
+
+#jobs-table QToolButton#jobs-row-open-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#jobs-table QToolButton#jobs-row-open-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
+
 #start-btn {
     background-color: #2563eb;
     color: #ffffff;
@@ -552,6 +590,36 @@ QHeaderView::section {
     letter-spacing: 0.5px;
 }
 
+#home-file-table QHeaderView::section {
+    padding: 9px 12px;
+    letter-spacing: 0.35px;
+}
+#home-file-table QWidget#home-filename-cell[homeRowSelected=true],
+#home-file-table QWidget#home-status-cell[homeRowSelected=true],
+#home-file-table QWidget#home-folder-cell[homeRowSelected=true] {
+    background-color: #1e2d4a;
+    border-radius: 4px;
+}
+#home-file-table QToolButton#home-row-open-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#home-file-table QToolButton#home-row-open-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+}
+
+#jobs-table QToolButton#jobs-row-open-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#jobs-table QToolButton#jobs-row-open-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+}
+
 #start-btn {
     background-color: #2563eb;
     color: #ffffff;
@@ -653,7 +721,3 @@ def get_stylesheet(theme: str) -> str:
     if theme == THEME_DARK:
         return DARK_STYLESHEET
     return LIGHT_STYLESHEET
-
-
-# Backwards-compatible name used by main.py (default is LIGHT).
-APP_STYLESHEET = LIGHT_STYLESHEET

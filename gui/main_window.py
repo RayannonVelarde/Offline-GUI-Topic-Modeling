@@ -1,5 +1,5 @@
+import json
 import os
-import sys
 import time
 import keyring
 from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer
@@ -16,13 +16,14 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMessageBox,
     QProgressBar,
     QSizePolicy,
     QPushButton,
     QSpinBox,
     QSplitter,
     QStackedWidget,
-    QTableWidgetSelectionRange,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -56,11 +57,15 @@ KEY_AUTO_OPEN_OUTPUT = "jobs/auto_open_output_folder"
 
 OUTPUT_SPANISH_BASENAME = "transcription_spanish.txt"
 OUTPUT_ENGLISH_BASENAME = "transcription_english.txt"
+# Sidecar next to archived transcripts: <stem>_transcription_meta.json
+TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
 
 # Home file table viewport: medium default, grow with real row/widget heights, cap then scroll.
 HOME_TABLE_MIN_H = 260
 HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
 HOME_TABLE_ROW_MIN_H = 52
+# Home table: fixed-width action column (22px toolbutton + balanced horizontal padding).
+HOME_TABLE_FOLDER_COL_W = 60
 
 
 def _format_duration(seconds: float) -> str:
@@ -102,20 +107,6 @@ STATUS_COLORS = {
     "Complete":   "#22c55e",
     "Error":      "#ef4444",
 }
-
-# ── Sample data ───────────────────────────────────────────────────────────────
-
-SAMPLE_FILES = [
-    #("interview_01.mp3",  "12:34",   "Pending"),
-    #("meeting_notes.wav", "45:12",   "Processing"),
-    #("podcast_ep5.m4a",   "1:23:45", "Complete"),
-]
-
-SAMPLE_JOBS = [
-    #("interview_01.mp3",  "Transcribing...", 75),
-    #("meeting_notes.wav", "Processing...",   45),
-    #("podcast_ep5.m4a",   "Complete",       100),
-]
 
 # (page_id, label) — icons from nav_icons (SVG, consistent stroke style)
 NAV_DEF: list[tuple[str, str]] = [
@@ -250,6 +241,7 @@ class MainWindow(QMainWindow):
         if qapp is not None:
             qapp.setStyleSheet(get_stylesheet(theme))
         self._refresh_nav_icons()
+        QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
     def _refresh_nav_icons(self):
         if not self._nav_buttons:
@@ -433,10 +425,10 @@ class MainWindow(QMainWindow):
         section.setObjectName("section-title")
         card_layout.addWidget(section)
 
-        self.jobs_table = QTableWidget(0, 5)
+        self.jobs_table = QTableWidget(0, 4)
         self.jobs_table.setObjectName("jobs-table")
         self.jobs_table.setHorizontalHeaderLabels(
-            ["Duration", "Filename", "Status", "Output folder", "Opened"]
+            ["Duration", "Filename", "Status", "Output folder"]
         )
         self.jobs_table.verticalHeader().setVisible(False)
         self.jobs_table.setShowGrid(False)
@@ -448,7 +440,6 @@ class MainWindow(QMainWindow):
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         card_layout.addWidget(self.jobs_table)
 
@@ -752,8 +743,9 @@ class MainWindow(QMainWindow):
             return
 
     def _build_table(self) -> QTableWidget:
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["Duration", "Filename", "Status"])
+        self.table = QTableWidget(0, 4)
+        self.table.setObjectName("home-file-table")
+        self.table.setHorizontalHeaderLabels(["Duration", "Filename", "Status", ""])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -761,16 +753,17 @@ class MainWindow(QMainWindow):
         self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(False)
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        self.table.setColumnWidth(3, HOME_TABLE_FOLDER_COL_W)
 
         # Hide home warning once the user makes a valid selection.
         self.table.itemSelectionChanged.connect(self._on_home_selection_changed)
-
-        for fname, dur, status in SAMPLE_FILES:
-            self._append_table_row(fname, dur, status)
+        self.table.itemSelectionChanged.connect(self._sync_home_row_selection_styles)
 
         QTimer.singleShot(0, self._sync_home_table_height)
         return self.table
@@ -916,6 +909,62 @@ class MainWindow(QMainWindow):
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
 
+    def _per_job_output_folder_for_path(self, path_key: str) -> str:
+        """Folder from job record for this file if recorded and the directory exists."""
+        if not (path_key or "").strip():
+            return ""
+        tgt = self._canonical_file_path(path_key)
+        fname = os.path.basename(path_key.strip())
+        for rec in self._jobs:
+            if rec.get("fname") != fname:
+                continue
+            rfp = self._canonical_file_path((rec.get("full_path") or "").strip())
+            if tgt and rfp and rfp != tgt:
+                continue
+            folder = (rec.get("output_folder") or "").strip()
+            if folder and os.path.isdir(folder):
+                return folder
+        return ""
+
+    def _open_home_row_output_folder(self, path_key: str) -> None:
+        """Open per-job output folder if set; else general output folder if it exists."""
+        per = self._per_job_output_folder_for_path(path_key)
+        if per:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(per))
+            return
+        saved = self._settings().value(KEY_OUTPUT_FOLDER, "")
+        if isinstance(saved, str) and saved.strip():
+            p = os.path.abspath(saved.strip())
+            if os.path.isdir(p):
+                QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+                return
+        default_path = os.path.join(SCRIPT_DIR, "outputs")
+        if os.path.isdir(default_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(default_path)))
+            return
+        QMessageBox.information(
+            self,
+            "Output folder",
+            "No output folder is available yet.\n\n"
+            "Complete a job or choose an output folder in Settings.",
+        )
+
+    def _sync_home_row_selection_styles(self) -> None:
+        """Subtle tint on filename/status cell widgets so selection reads clearly."""
+        if not hasattr(self, "table"):
+            return
+        t = self.table
+        selected_rows: set[int] = set(ix.row() for ix in t.selectedIndexes())
+        for r in range(t.rowCount()):
+            sel = r in selected_rows
+            for col in (1, 2, 3):
+                w = t.cellWidget(r, col)
+                if w is not None:
+                    w.setProperty("homeRowSelected", sel)
+                    w.style().unpolish(w)
+                    w.style().polish(w)
+                    w.update()
+
     def _apply_home_status_bar_style(self, col2: QWidget, status: str, pct: int):
         st_lbl = getattr(col2, "_status_lbl", None)
         bar = getattr(col2, "_progress_bar", None)
@@ -937,6 +986,7 @@ class MainWindow(QMainWindow):
 
     def _build_home_filename_cell(self, fname: str, path_key: str) -> QWidget:
         outer = QWidget()
+        outer.setObjectName("home-filename-cell")
         outer._path_key = path_key  # type: ignore[attr-defined]
         outer._fname = fname  # type: ignore[attr-defined]
         outer_layout = QVBoxLayout(outer)
@@ -968,7 +1018,6 @@ class MainWindow(QMainWindow):
         log_edit = QTextEdit()
         log_edit.setObjectName("home-file-log")
         log_edit.setReadOnly(True)
-        log_edit.setPlainText("")
         log_edit.hide()
         log_edit.setMinimumHeight(120)
         log_edit.setMaximumHeight(200)
@@ -998,15 +1047,65 @@ class MainWindow(QMainWindow):
         lay.addWidget(lab, alignment=Qt.AlignmentFlag.AlignCenter)
         return w
 
+    def _build_jobs_output_folder_cell(self, folder_display: str, path_key: str) -> QWidget:
+        """Output path + compact folder button on the right (same open logic as Home)."""
+        w = QWidget()
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(8)
+        path_lbl = QLabel((folder_display or "").strip() or "—")
+        path_lbl.setWordWrap(False)
+        path_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        path_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        lay.addWidget(path_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
+        btn = QToolButton()
+        btn.setObjectName("jobs-row-open-btn")
+        btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        btn.setIconSize(QSize(14, 14))
+        btn.setFixedSize(22, 22)
+        btn.setToolTip("Open output folder")
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setAutoRaise(True)
+        pk = path_key.strip() if path_key else ""
+        btn.clicked.connect(lambda _=False, p=pk: self._open_home_row_output_folder(p))
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        return w
+
+    def _build_home_folder_cell(self, path_key: str) -> QWidget:
+        """Separate cell from Status: folder action only (same open behavior)."""
+        wrap = QWidget()
+        wrap.setObjectName("home-folder-cell")
+        wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        lay = QHBoxLayout(wrap)
+        # Slightly larger right inset shifts the layout-centered 22px hit target left so the
+        # SP_DirOpenIcon pixmap (often uneven transparent padding; glyph reads right in the box) looks centered.
+        lay.setContentsMargins(7, 4, 9, 4)
+        lay.setSpacing(0)
+        btn = QToolButton()
+        btn.setObjectName("home-row-open-btn")
+        btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        btn.setIconSize(QSize(14, 14))
+        btn.setFixedSize(22, 22)
+        btn.setToolTip("Open output folder")
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setAutoRaise(True)
+        pk = path_key.strip() if path_key else ""
+        btn.clicked.connect(lambda _=False, p=pk: self._open_home_row_output_folder(p))
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+        return wrap
+
     def _build_home_status_cell(self, status: str) -> QWidget:
         sw = QWidget()
+        sw.setObjectName("home-status-cell")
         vl = QVBoxLayout(sw)
         vl.setContentsMargins(6, 4, 6, 4)
         vl.setSpacing(6)
         st_lbl = QLabel(status)
         st_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         bar = QProgressBar()
-        bar.setMaximum(100)
         bar.setRange(0, 100)
         bar.setValue(0)
         bar.setTextVisible(False)
@@ -1061,9 +1160,11 @@ class MainWindow(QMainWindow):
 
         col2 = self._build_home_status_cell(status)
         self.table.setCellWidget(row, 2, col2)
+        self.table.setCellWidget(row, 3, self._build_home_folder_cell(path_key))
 
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
+        QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
     def add_files_to_table(self, files: list[str]):
         for path in files:
@@ -1131,7 +1232,6 @@ class MainWindow(QMainWindow):
                 "[warn] Hugging Face token is missing. Add it in Settings before starting this job.",
                 target_path=path_key,
             )
-            from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(
                 self,
                 "Token required",
@@ -1324,15 +1424,12 @@ class MainWindow(QMainWindow):
             status_text = rec.get("status", "")
             self.jobs_table.setCellWidget(row, 2, self._build_home_status_cell(status_text))
 
-            out_item = QTableWidgetItem(rec.get("output_folder", ""))
-            out_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            path_key = fp if fp else (rec.get("fname") or "")
+            self.jobs_table.setCellWidget(
+                row,
+                3,
+                self._build_jobs_output_folder_cell(rec.get("output_folder", ""), path_key),
             )
-            self.jobs_table.setItem(row, 3, out_item)
-
-            opened_item = QTableWidgetItem(rec.get("opened", ""))
-            opened_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
-            self.jobs_table.setItem(row, 4, opened_item)
 
             self.jobs_table.setRowHeight(row, HOME_TABLE_ROW_MIN_H)
 
@@ -1346,20 +1443,65 @@ class MainWindow(QMainWindow):
         except Exception as e:
             return f"[error] Could not read file:\n{path}\n\n{e}"
 
+    def _transcription_meta_path(self, out_dir: str, stem: str) -> str:
+        return os.path.join(out_dir, f"{stem}{TRANSCRIPTION_META_SUFFIX}")
+
+    def _read_transcription_meta(self, out_dir: str, stem: str) -> dict | None:
+        path = self._transcription_meta_path(out_dir, stem)
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+
+    def _write_transcription_meta(
+        self,
+        out_dir: str,
+        full_path: str,
+        stem: str,
+        dst_spanish: str,
+        dst_english: str,
+    ) -> None:
+        payload = {
+            "version": 1,
+            "source_basename": os.path.basename(full_path.strip()),
+            "stem": stem,
+            "spanish_basename": os.path.basename(dst_spanish) if dst_spanish else "",
+            "english_basename": os.path.basename(dst_english) if dst_english else "",
+        }
+        try:
+            with open(self._transcription_meta_path(out_dir, stem), "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        except OSError:
+            pass
+
+    def _review_display_name(self, out_dir: str, stem: str) -> str:
+        """Label for Review UI: original source basename if sidecar exists, else stem."""
+        meta = self._read_transcription_meta(out_dir, stem)
+        if meta:
+            sb = (meta.get("source_basename") or "").strip()
+            if sb:
+                return sb
+        return stem
+
     def _archive_latest_outputs_for_job(self, full_path: str) -> dict:
         """
         mixbothtask.py writes fixed filenames in SCRIPT_DIR.
-        After each successful run, move them into the output folder with unique names.
+        After each successful run, move them into the output folder as
+        <audio_stem>_transcription_spanish.txt / <audio_stem>_transcription_english.txt
+        (overwrites prior runs with the same stem).
         """
         out_dir = self._get_output_folder()
-        base = os.path.splitext(os.path.basename(full_path))[0]
-        stamp = time.strftime("%Y%m%d_%H%M%S")
+        base = os.path.splitext(os.path.basename(full_path.strip()))[0]
 
         src_spanish = os.path.join(SCRIPT_DIR, OUTPUT_SPANISH_BASENAME)
         src_english = os.path.join(SCRIPT_DIR, OUTPUT_ENGLISH_BASENAME)
 
-        dst_spanish = os.path.join(out_dir, f"{base}_{stamp}_transcription_spanish.txt")
-        dst_english = os.path.join(out_dir, f"{base}_{stamp}_translation_english.txt")
+        dst_spanish = os.path.join(out_dir, f"{base}_transcription_spanish.txt")
+        dst_english = os.path.join(out_dir, f"{base}_transcription_english.txt")
 
         moved_any = False
         if os.path.exists(src_spanish):
@@ -1372,6 +1514,9 @@ class MainWindow(QMainWindow):
             moved_any = True
         else:
             dst_english = ""
+
+        if moved_any:
+            self._write_transcription_meta(out_dir, full_path, base, dst_spanish, dst_english)
 
         return {
             "folder": out_dir,
@@ -1387,10 +1532,33 @@ class MainWindow(QMainWindow):
         # Prefer recently completed jobs we already know about.
         for rec in self._jobs:
             if rec.get("status") == "Complete" and (rec.get("spanish_path") or rec.get("english_path")):
+                job_out = (rec.get("output_folder") or "").strip() or out_dir
+                fname = (rec.get("fname") or "").strip()
+                if not fname:
+                    fp = (rec.get("full_path") or "").strip()
+                    fname = os.path.basename(fp) if fp else ""
+                stem = ""
+                sp = (rec.get("spanish_path") or "").strip()
+                if sp:
+                    bn = os.path.basename(sp)
+                    if bn.endswith("_transcription_spanish.txt"):
+                        stem = bn[: -len("_transcription_spanish.txt")]
+                if not stem:
+                    enp = (rec.get("english_path") or "").strip()
+                    if enp:
+                        bn = os.path.basename(enp)
+                        if bn.endswith("_transcription_english.txt"):
+                            stem = bn[: -len("_transcription_english.txt")]
+                        elif bn.endswith("_translation_english.txt"):
+                            stem = bn[: -len("_translation_english.txt")]
+                if not fname and stem:
+                    fname = self._review_display_name(job_out, stem)
+                if not fname:
+                    fname = stem or "—"
                 items.append(
                     {
-                        "label": rec.get("fname", ""),
-                        "folder": rec.get("output_folder", out_dir),
+                        "label": fname,
+                        "folder": job_out,
                         "spanish_path": rec.get("spanish_path", ""),
                         "english_path": rec.get("english_path", ""),
                     }
@@ -1405,20 +1573,23 @@ class MainWindow(QMainWindow):
                     continue
                 full = os.path.join(out_dir, fn)
                 key = fn
-                # Group by base + timestamp prefix (everything before last suffix)
+                # Group by audio stem: <stem>_transcription_spanish.txt / <stem>_transcription_english.txt
                 if fn.endswith("_transcription_spanish.txt"):
                     key = fn[: -len("_transcription_spanish.txt")]
                     groups.setdefault(key, {})["spanish_path"] = full
+                elif fn.endswith("_transcription_english.txt"):
+                    key = fn[: -len("_transcription_english.txt")]
+                    groups.setdefault(key, {})["english_path"] = full
                 elif fn.endswith("_translation_english.txt"):
+                    # Legacy GUI archive name (older builds)
                     key = fn[: -len("_translation_english.txt")]
                     groups.setdefault(key, {})["english_path"] = full
-                groups.setdefault(key, {})["label"] = key
                 groups.setdefault(key, {})["folder"] = out_dir
             for key, g in groups.items():
                 if g.get("spanish_path") or g.get("english_path"):
                     items.append(
                         {
-                            "label": g.get("label", key),
+                            "label": self._review_display_name(out_dir, key),
                             "folder": g.get("folder", out_dir),
                             "spanish_path": g.get("spanish_path", ""),
                             "english_path": g.get("english_path", ""),

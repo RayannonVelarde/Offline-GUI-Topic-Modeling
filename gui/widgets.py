@@ -28,7 +28,6 @@ class JobCard(QFrame):
         self.name_lbl = QLabel(name)
         self.name_lbl.setObjectName("job-name")
         self.name_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-        self.name_lbl.setSizePolicy(self.name_lbl.sizePolicy().horizontalPolicy(), self.name_lbl.sizePolicy().verticalPolicy())
         self.pct_lbl = QLabel(f"{pct}%")
         self.pct_lbl.setObjectName("job-pct")
         self.pct_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
