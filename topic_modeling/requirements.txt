@@ -6,3 +6,4 @@ umap-learn
 hdbscan
 numpy
 tqdm
+requests

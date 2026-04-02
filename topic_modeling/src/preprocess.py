@@ -8,10 +8,10 @@ def extract_metadata(line):
     speaker = None
     timestamp = None
 
-    # extract speaker label (e.g., SPEAKER_00)
-    speaker_match = re.search(r"\[?(SPEAKER_\d+)\]?:", line)
+    # capture any leading speaker label like "Tom:" or "Meeting Chairman:"
+    speaker_match = re.match(r"^\s*([^:]+):\s*", line)
     if speaker_match:
-        speaker = speaker_match.group(1)
+        speaker = speaker_match.group(1).strip()
 
     # extract timestamp (e.g., 00:01:23)
     timestamp_match = re.search(r"\d{2}:\d{2}:\d{2}", line)
@@ -22,8 +22,8 @@ def extract_metadata(line):
 
 # remove speaker labels and timestamps from transcript text
 def clean_text(line):
-    # remove speaker labels
-    line = re.sub(r"\[?SPEAKER_\d+\]?:", "", line)
+    # remove any leading speaker label
+    line = re.sub(r"^\s*[^:]+:\s*", "", line)
 
     # remove timestamps
     line = re.sub(r"\d{2}:\d{2}:\d{2}", "", line)
