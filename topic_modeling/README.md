@@ -4,7 +4,7 @@ Simple offline pipeline for preprocessing transcripts and generating topics usin
 
 ## Pipeline
 
-1. Preprocess transcript → CSV
+1. Preprocess transcript(s) → CSV
 2. Generate embeddings + run BERTopic
 3. Output topics, keywords, and examples
 4. (Optional) Generate topic labels with a local LLM (Ollama)
@@ -33,35 +33,54 @@ ollama serve
 
 ## Run
 
-### Full pipeline
+### Single transcript
 
 ```bash
-python pipeline.py ../data/transcription_english.txt
+python pipeline.py <path_to_file>
+```
+
+Example:
+
+```bash
+python pipeline.py transcription_english.txt
+```
+
+### Folder of transcripts
+
+```bash
+python pipeline.py <path_to_folder>
+```
+
+Example:
+
+```bash
+python pipeline.py data
 ```
 
 ### With topic labeling
 
 ```bash
-python pipeline.py ../data/transcription_english.txt --label
+python pipeline.py <path_to_file_or_folder> --label
 ```
 
 ### Use a different model
 
 ```bash
-python pipeline.py ../data/transcription_english.txt --label mistral
+python pipeline.py <path_to_file_or_folder> --label mistral
 ```
 
 ### Optional: exclude a speaker
 
 ```bash
-python pipeline.py ../data/transcription_english.txt SPEAKER_00
+python pipeline.py <path_to_file_or_folder> SPEAKER_00
 ```
 
 ## Output
 
 Saved in `output/`:
 
-* `cleaned_*.csv` → cleaned transcript
+* `cleaned_<file>.csv` → cleaned transcript (per file)
+* `cleaned_<folder>.csv` → combined dataset (for folder input)
 * `*_topic_results.csv` → topic assignments
 * `*_topic_summary.json` → topics (keywords, examples, labels)
 * `*_topic_model/` → saved BERTopic model

@@ -1,31 +1,37 @@
 import os
 import sys
 import subprocess
+from pathlib import Path
 
-def run_pipeline(transcript_file, interviewer_speaker=None, use_labeling=False, ollama_model="llama3.1"):
-    # ensure output directory exists
+def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollama_model="llama3.1"):
     os.makedirs("../output", exist_ok=True)
 
-    # get base filename info
-    input_name = os.path.basename(transcript_file)
-    name_only, _ = os.path.splitext(input_name)
+    input_path = Path(input_path)
 
-    cleaned_csv = f"../output/cleaned_{name_only}.csv"
-    topic_results_csv = f"../output/cleaned_{name_only}_topic_results.csv"
-    topic_model_path = f"../output/cleaned_{name_only}_topic_model"
-    topic_summary_json = f"../output/cleaned_{name_only}_topic_summary.json"
-
-    # step 1: preprocessing
-    preprocess_cmd = ["python", "preprocess.py", transcript_file]
+    # run preprocessing
+    preprocess_cmd = ["python", "preprocess.py", str(input_path)]
     if interviewer_speaker:
         preprocess_cmd.append(interviewer_speaker)
 
     print("=== Running preprocessing ===")
     subprocess.run(preprocess_cmd, check=True)
 
-    # step 2: topic modeling
-    topic_cmd = ["python", "topic_modeling.py", cleaned_csv]
+    # determine which cleaned csv to send into topic modeling
+    if input_path.is_file():
+        cleaned_csv = f"../output/cleaned_{input_path.stem}.csv"
+    elif input_path.is_dir():
+        cleaned_csv = f"../output/cleaned_{input_path.name}.csv"
+    else:
+        raise ValueError("Invalid input path")
 
+    # build expected output names
+    original_name = Path(cleaned_csv).stem
+    topic_results_csv = f"../output/{original_name}_topic_results.csv"
+    topic_model_path = f"../output/{original_name}_topic_model"
+    topic_summary_json = f"../output/{original_name}_topic_summary.json"
+    
+    # run topic modeling
+    topic_cmd = ["python", "topic_modeling.py", cleaned_csv]
     if use_labeling:
         topic_cmd.extend(["--label", ollama_model])
 
@@ -44,6 +50,7 @@ def run_pipeline(transcript_file, interviewer_speaker=None, use_labeling=False, 
     else:
         print("Ollama labeling: disabled")
 
+# CLI entry
 if __name__ == "__main__":
 
     if len(sys.argv) < 2:
