@@ -41,12 +41,31 @@ _SVG_PARTS: dict[str, str] = {
 <line x1="10" y1="8" x2="14" y2="8"/>
 <line x1="18" y1="16" x2="22" y2="16"/>
 """,
+    # Open folder: same 24×24 stroke language as nav icons (Lucide-style folder-open).
+    "folder_open": """
+<path d="m6 14 1.5-2.4A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3.17a2 2 0 0 1 1.66.9l.83 1.2H18a2 2 0 0 1 2 2v2"/>
+""",
+    # Disclosure chevrons (inline log expand/collapse).
+    "chevron_right": """
+<polyline points="9 18 15 12 9 6"/>
+""",
+    "chevron_down": """
+<polyline points="6 9 12 15 18 9"/>
+""",
+    # Document with lines (inline job log toggle on Home table).
+    "log_output": """
+<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+<polyline points="14 2 14 8 20 8"/>
+<line x1="8" y1="13" x2="16" y2="13"/>
+<line x1="8" y1="17" x2="16" y2="17"/>
+<line x1="8" y1="9" x2="11" y2="9"/>
+""",
 }
 
 
-def make_nav_icon(page_id: str, *, size: int = 18, color_hex: str = "#475569") -> QIcon:
-    """Render a crisp pixmap icon at logical `size` (respects device pixel ratio)."""
-    inner = _SVG_PARTS.get(page_id)
+def _render_stroke_icon(part_id: str, *, size: int, color_hex: str) -> QIcon:
+    """Shared renderer: 24×24 viewBox, stroke 2, round caps (matches sidebar nav icons)."""
+    inner = _SVG_PARTS.get(part_id)
     if inner is None:
         return QIcon()
 
@@ -70,3 +89,24 @@ def make_nav_icon(page_id: str, *, size: int = 18, color_hex: str = "#475569") -
     p.end()
     pm.setDevicePixelRatio(dpr)
     return QIcon(pm)
+
+
+def make_nav_icon(page_id: str, *, size: int = 18, color_hex: str = "#475569") -> QIcon:
+    """Render a crisp pixmap icon at logical `size` (respects device pixel ratio)."""
+    return _render_stroke_icon(page_id, size=size, color_hex=color_hex)
+
+
+def make_folder_open_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Stroke folder-open icon matching nav icon family (for Home table action column)."""
+    return _render_stroke_icon("folder_open", size=size, color_hex=color_hex)
+
+
+def make_disclosure_chevron_icon(*, expanded: bool, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Right = collapsed, down = expanded (same stroke family as nav icons)."""
+    key = "chevron_down" if expanded else "chevron_right"
+    return _render_stroke_icon(key, size=size, color_hex=color_hex)
+
+
+def make_log_output_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Document-with-lines icon for inline job log show/hide (Home filename row)."""
+    return _render_stroke_icon("log_output", size=size, color_hex=color_hex)

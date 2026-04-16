@@ -31,12 +31,18 @@ QMainWindow, QWidget {
     color: #0f172a;
     padding: 4px 0px;
     line-height: 1.25;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
 }
 
 #sidebar-sub {
     font-size: 11px;
     color: #64748b;
     padding: 0px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
 }
 
 #nav-btn {
@@ -85,6 +91,10 @@ QMainWindow, QWidget {
 }
 
 /* ── Settings ── */
+#settings-page QWidget {
+    background-color: transparent;
+}
+
 #settings-card {
     background-color: #ffffff;
     border: 1px solid #d7dee8;
@@ -117,6 +127,29 @@ QComboBox#settings-input QAbstractItemView {
     selection-color: #0f172a;
 }
 
+QSpinBox#settings-input {
+    padding: 7px 10px;
+}
+QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
+    width: 18px;
+}
+
+#settings-hint {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 400;
+    margin-top: 2px;
+}
+
+#settings-page #settings-card #section-title {
+    padding-bottom: 0px;
+}
+
+/* ── Review ── */
+#review-page QWidget {
+    background-color: transparent;
+}
+
 /* ── Review previews ── */
 #review-preview {
     background-color: #ffffff;
@@ -126,6 +159,27 @@ QComboBox#settings-input QAbstractItemView {
     color: #0f172a;
     font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
     font-size: 11px;
+}
+
+/* ── Review audio player ── */
+#review-volume {
+    max-height: 18px;
+}
+#review-volume::groove:horizontal {
+    height: 4px;
+    background: #e2e8f0;
+    border-radius: 2px;
+}
+#review-volume::sub-page:horizontal {
+    background: #2563eb;
+    border-radius: 2px;
+}
+#review-volume::handle:horizontal {
+    width: 10px;
+    margin: -4px 0;
+    background: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
 }
 
 /* ── Center ── */
@@ -145,7 +199,7 @@ QComboBox#settings-input QAbstractItemView {
 }
 
 #drop-zone {
-    background-color: #ffffff; /* cards / table / drop zone near-white */
+    background-color: transparent;
     border: 1.5px dashed #cbd5e1;
     border-radius: 12px;
     color: #64748b;
@@ -153,7 +207,7 @@ QComboBox#settings-input QAbstractItemView {
 }
 #drop-zone:hover {
     border-color: #3b82f6;
-    background-color: #f8fafc;
+    background-color: transparent;
 }
 
 #drop-icon {
@@ -187,6 +241,22 @@ QComboBox#settings-input QAbstractItemView {
     font-weight: 500;
 }
 #add-btn:hover {
+    border-color: #2563eb;
+    color: #2563eb;
+    background-color: #f8fafc;
+}
+
+/* Review play button: same hierarchy as add-btn */
+QToolButton#review-play-btn {
+    background-color: transparent;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 8px;
+    color: #334155;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+QToolButton#review-play-btn:hover {
     border-color: #2563eb;
     color: #2563eb;
     background-color: #f8fafc;
@@ -259,6 +329,15 @@ QHeaderView::section {
     background-color: rgba(15, 23, 42, 0.06);
     border-radius: 4px;
 }
+#home-file-table QToolButton#home-row-log-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#home-file-table QToolButton#home-row-log-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
 
 #jobs-table QToolButton#jobs-row-open-btn {
     background: transparent;
@@ -270,7 +349,33 @@ QHeaderView::section {
     border-radius: 4px;
 }
 
-#start-btn {
+/* Jobs card: "Recent jobs" label + table header row sit flat on card (no inner gray bar) */
+#jobs-recent-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.8px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+    margin: 0px;
+}
+
+#jobs-table QHeaderView::section {
+    background-color: #ffffff;
+    color: #64748b;
+    padding: 10px 14px;
+    border: none;
+    border-bottom: 1px solid #d7dee8;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* QPushButton: native style can ignore generic #id backgrounds until hover; be explicit. */
+QPushButton#start-btn {
     background-color: #2563eb;
     color: #ffffff;
     border: none;
@@ -279,7 +384,10 @@ QHeaderView::section {
     font-size: 13px;
     font-weight: 600;
 }
-#start-btn:hover {
+QPushButton#start-btn:hover {
+    background-color: #1d4ed8;
+}
+QPushButton#start-btn:pressed {
     background-color: #1d4ed8;
 }
 
@@ -389,12 +497,18 @@ QMainWindow, QWidget {
     color: #f1f5f9;
     padding: 4px 0px;
     line-height: 1.25;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
 }
 
 #sidebar-sub {
     font-size: 11px;
     color: #475569;
     padding: 0px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
 }
 
 #nav-btn {
@@ -444,6 +558,10 @@ QMainWindow, QWidget {
 }
 
 /* ── Settings ── */
+#settings-page QWidget {
+    background-color: transparent;
+}
+
 #settings-card {
     background-color: #141720;
     border: 1px solid #1e2433;
@@ -476,6 +594,29 @@ QComboBox#settings-input QAbstractItemView {
     selection-color: #e2e8f0;
 }
 
+QSpinBox#settings-input {
+    padding: 7px 10px;
+}
+QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
+    width: 18px;
+}
+
+#settings-hint {
+    color: #64748b;
+    font-size: 12px;
+    font-weight: 400;
+    margin-top: 2px;
+}
+
+#settings-page #settings-card #section-title {
+    padding-bottom: 0px;
+}
+
+/* ── Review ── */
+#review-page QWidget {
+    background-color: transparent;
+}
+
 /* ── Review previews ── */
 #review-preview {
     background-color: #0f1117;
@@ -485,6 +626,27 @@ QComboBox#settings-input QAbstractItemView {
     color: #e2e8f0;
     font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
     font-size: 11px;
+}
+
+/* ── Review audio player ── */
+#review-volume {
+    max-height: 18px;
+}
+#review-volume::groove:horizontal {
+    height: 4px;
+    background: #1e2433;
+    border-radius: 2px;
+}
+#review-volume::sub-page:horizontal {
+    background: #3b82f6;
+    border-radius: 2px;
+}
+#review-volume::handle:horizontal {
+    width: 10px;
+    margin: -4px 0;
+    background: #0f1117;
+    border: 1px solid #334155;
+    border-radius: 6px;
 }
 
 /* ── Center ── */
@@ -504,7 +666,7 @@ QComboBox#settings-input QAbstractItemView {
 }
 
 #drop-zone {
-    background-color: #141720;
+    background-color: transparent;
     border: 1.5px dashed #2d3748;
     border-radius: 12px;
     color: #64748b;
@@ -512,7 +674,7 @@ QComboBox#settings-input QAbstractItemView {
 }
 #drop-zone:hover {
     border-color: #3b82f6;
-    background-color: #161c2e;
+    background-color: transparent;
 }
 
 #drop-icon {
@@ -546,6 +708,22 @@ QComboBox#settings-input QAbstractItemView {
     font-weight: 500;
 }
 #add-btn:hover {
+    border-color: #3b82f6;
+    color: #3b82f6;
+    background-color: #161c2e;
+}
+
+/* Review play button: same hierarchy as add-btn */
+QToolButton#review-play-btn {
+    background-color: transparent;
+    border: 1.5px solid #334155;
+    border-radius: 8px;
+    color: #cbd5e1;
+    padding: 7px 12px;
+    font-size: 13px;
+    font-weight: 600;
+}
+QToolButton#review-play-btn:hover {
     border-color: #3b82f6;
     color: #3b82f6;
     background-color: #161c2e;
@@ -609,6 +787,15 @@ QHeaderView::section {
     background-color: rgba(255, 255, 255, 0.07);
     border-radius: 4px;
 }
+#home-file-table QToolButton#home-row-log-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#home-file-table QToolButton#home-row-log-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+}
 
 #jobs-table QToolButton#jobs-row-open-btn {
     background: transparent;
@@ -620,7 +807,31 @@ QHeaderView::section {
     border-radius: 4px;
 }
 
-#start-btn {
+#jobs-recent-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #94a3b8;
+    letter-spacing: 0.8px;
+    background-color: transparent;
+    border: none;
+    border-radius: 0px;
+    padding: 0px;
+    margin: 0px;
+}
+
+#jobs-table QHeaderView::section {
+    background-color: #141720;
+    color: #475569;
+    padding: 10px 14px;
+    border: none;
+    border-bottom: 1px solid #1e2433;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+QPushButton#start-btn {
     background-color: #2563eb;
     color: #ffffff;
     border: none;
@@ -629,7 +840,10 @@ QHeaderView::section {
     font-size: 13px;
     font-weight: 600;
 }
-#start-btn:hover {
+QPushButton#start-btn:hover {
+    background-color: #1d4ed8;
+}
+QPushButton#start-btn:pressed {
     background-color: #1d4ed8;
 }
 

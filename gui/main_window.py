@@ -3,7 +3,7 @@ import os
 import time
 import keyring
 from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer
-from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -31,11 +31,19 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QFileDialog,
+    QFormLayout,
+    QSlider,
 )
 
 from widgets import DropZone
 from stylesheet import THEME_DARK, THEME_LIGHT, get_stylesheet
-from nav_icons import make_nav_icon
+from nav_icons import make_folder_open_icon, make_log_output_icon, make_nav_icon
+
+try:
+    from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+except Exception:  # QtMultimedia may be unavailable in some PySide6 builds
+    QAudioOutput = None  # type: ignore[assignment]
+    QMediaPlayer = None  # type: ignore[assignment]
 
 # Path to mixbothtask.py (same directory as this file)
 SCRIPT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -64,8 +72,8 @@ TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
 HOME_TABLE_MIN_H = 260
 HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
 HOME_TABLE_ROW_MIN_H = 52
-# Home table: fixed-width action column (22px toolbutton + balanced horizontal padding).
-HOME_TABLE_FOLDER_COL_W = 60
+# Home table: action column (folder + log toolbuttons + padding).
+HOME_TABLE_FOLDER_COL_W = 108
 
 
 def _format_duration(seconds: float) -> str:
@@ -193,6 +201,106 @@ class ReviewComparisonPage(QFrame):
         self._apply_layout_mode()
 
 
+class WaveSeekBar(QSlider):
+    """Compact timeline with click/drag seek + subtle waveform bars."""
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self.setMouseTracking(True)
+        self.setRange(0, 0)
+        self.setSingleStep(1000)
+        self.setPageStep(5000)
+        self.setFixedHeight(22)
+        self._dragging = False
+
+    def isDragging(self) -> bool:
+        return bool(self._dragging)
+
+    def _value_from_x(self, x: int) -> int:
+        w = max(1, self.width() - 2)
+        r = self.maximum() - self.minimum()
+        if r <= 0:
+            return self.minimum()
+        frac = max(0.0, min(1.0, (x - 1) / float(w)))
+        return int(self.minimum() + frac * r)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self.setValue(self._value_from_x(int(event.position().x())))
+            self.sliderMoved.emit(self.value())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._dragging:
+            self.setValue(self._value_from_x(int(event.position().x())))
+            self.sliderMoved.emit(self.value())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self._dragging = False
+            self.sliderReleased.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect().adjusted(1, 6, -1, -6)
+
+        theme = getattr(self.window(), "_theme", THEME_LIGHT)
+        if theme == THEME_DARK:
+            track = QColor("#1e2433")
+            fill = QColor("#3b82f6")
+            bars = QColor(255, 255, 255, 60)
+        else:
+            track = QColor("#e2e8f0")
+            fill = QColor("#2563eb")
+            bars = QColor(15, 23, 42, 40)
+
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(track)
+        p.drawRoundedRect(rect, 6, 6)
+
+        rng = self.maximum() - self.minimum()
+        frac = 0.0 if rng <= 0 else (self.value() - self.minimum()) / float(rng)
+        w = int(rect.width() * max(0.0, min(1.0, frac)))
+        if w > 0:
+            fill_rect = rect.adjusted(0, 0, -(rect.width() - w), 0)
+            p.setBrush(fill)
+            p.drawRoundedRect(fill_rect, 6, 6)
+
+        p.setBrush(bars)
+        p.setPen(Qt.PenStyle.NoPen)
+        x0 = rect.x() + 6
+        x1 = rect.right() - 6
+        mid = rect.center().y()
+        step = 7
+        i = 0
+        for x in range(x0, x1, step):
+            h = 3 + ((i * 7) % 9)
+            p.drawRoundedRect(x, int(mid - h / 2), 2, h, 1, 1)
+            i += 1
+
+        if w > 0:
+            px = rect.x() + w
+            p.setPen(
+                QPen(
+                    QColor(255, 255, 255, 160) if theme == THEME_DARK else QColor(15, 23, 42, 120),
+                    1,
+                )
+            )
+            p.drawLine(px, rect.y() + 2, px, rect.bottom() - 2)
+
+        p.end()
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -241,6 +349,8 @@ class MainWindow(QMainWindow):
         if qapp is not None:
             qapp.setStyleSheet(get_stylesheet(theme))
         self._refresh_nav_icons()
+        self._refresh_home_folder_row_icons()
+        self._refresh_home_log_disclosure_icons()
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
     def _refresh_nav_icons(self):
@@ -253,6 +363,38 @@ class MainWindow(QMainWindow):
             color = active if pid == self._current_page else inactive
             btn.setIcon(make_nav_icon(pid, size=icon_sz, color_hex=color))
             btn.setIconSize(QSize(icon_sz, icon_sz))
+
+    def _refresh_home_folder_row_icons(self) -> None:
+        """Match Home table folder action icons to sidebar stroke style / inactive nav color."""
+        if not hasattr(self, "table"):
+            return
+        inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        for r in range(self.table.rowCount()):
+            w = self.table.cellWidget(r, 3)
+            if w is None:
+                continue
+            for btn in w.findChildren(QToolButton):
+                if btn.objectName() == "home-row-open-btn":
+                    btn.setIcon(make_folder_open_icon(size=icon_sz, color_hex=inactive))
+                    btn.setIconSize(QSize(icon_sz, icon_sz))
+                    break
+
+    def _refresh_home_log_disclosure_icons(self) -> None:
+        """Update Home action-column log/document icons when theme changes (stroke color)."""
+        if not hasattr(self, "table"):
+            return
+        col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        for r in range(self.table.rowCount()):
+            w = self.table.cellWidget(r, 3)
+            if w is None:
+                continue
+            for btn in w.findChildren(QToolButton):
+                if btn.objectName() == "home-row-log-btn":
+                    btn.setIcon(make_log_output_icon(size=icon_sz, color_hex=col))
+                    btn.setIconSize(QSize(icon_sz, icon_sz))
+                    break
 
     def _get_output_folder(self) -> str:
         """Return output folder; create a sensible default if unset."""
@@ -276,8 +418,12 @@ class MainWindow(QMainWindow):
         logo = QLabel("Speech to Text Studio")
         logo.setObjectName("sidebar-logo")
         logo.setWordWrap(True)
+        logo.setAutoFillBackground(False)
+        logo.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         sub = QLabel("Offline Tool")
         sub.setObjectName("sidebar-sub")
+        sub.setAutoFillBackground(False)
+        sub.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout.addWidget(logo)
         layout.addWidget(sub)
         layout.addSpacing(20)
@@ -392,6 +538,7 @@ class MainWindow(QMainWindow):
         start_btn = QPushButton("▶  Start Job")
         self._home_start_btn = start_btn
         start_btn.setObjectName("start-btn")
+        start_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         start_btn.setFixedWidth(130)
         start_btn.clicked.connect(self.open_job_options)
         layout.addWidget(start_btn, alignment=Qt.AlignmentFlag.AlignRight)
@@ -422,7 +569,9 @@ class MainWindow(QMainWindow):
         card_layout.setSpacing(12)
 
         section = QLabel("Recent jobs")
-        section.setObjectName("section-title")
+        section.setObjectName("jobs-recent-title")
+        section.setAutoFillBackground(False)
+        section.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         card_layout.addWidget(section)
 
         self.jobs_table = QTableWidget(0, 4)
@@ -488,6 +637,70 @@ class MainWindow(QMainWindow):
         self.review_info_path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         info_layout.addWidget(self.review_info_path)
 
+        # Audio player bar (under selector row)
+        player = QFrame()
+        player.setObjectName("settings-card")
+        player_layout = QHBoxLayout(player)
+        player_layout.setContentsMargins(14, 10, 14, 10)
+        player_layout.setSpacing(10)
+
+        self._review_audio_path: str = ""
+        self._review_player = None
+        self._review_audio_out = None
+
+        self.review_play_btn = QToolButton()
+        self.review_play_btn.setObjectName("review-play-btn")
+        self.review_play_btn.setToolTip("Play / pause")
+        # Always show an explicit label so it never reads as an empty box.
+        self.review_play_btn.setText("Play")
+        self.review_play_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.review_play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.review_play_btn.setIconSize(QSize(16, 16))
+        self.review_play_btn.setFixedHeight(32)
+        self.review_play_btn.setMinimumWidth(88)
+        self.review_play_btn.setEnabled(False)
+        self.review_play_btn.clicked.connect(self._on_review_play_pause_clicked)
+
+        self.review_seek = WaveSeekBar()
+        self.review_seek.setObjectName("review-seek")
+        self.review_seek.setEnabled(False)
+        self.review_seek.sliderMoved.connect(self._on_review_seek_preview)
+        self.review_seek.sliderReleased.connect(self._on_review_seek_commit)
+
+        self.review_time_lbl = QLabel("0:00 / 0:00")
+        self.review_time_lbl.setObjectName("settings-label")
+        self.review_time_lbl.setMinimumWidth(96)
+        self.review_time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.review_vol = QSlider(Qt.Orientation.Horizontal)
+        self.review_vol.setObjectName("review-volume")
+        self.review_vol.setRange(0, 100)
+        self.review_vol.setValue(80)
+        self.review_vol.setFixedWidth(92)
+
+        # Only enable audio playback if QtMultimedia is available.
+        if QMediaPlayer is not None and QAudioOutput is not None:
+            self._review_audio_out = QAudioOutput(self)
+            self._review_audio_out.setVolume(0.8)
+            self._review_player = QMediaPlayer(self)
+            self._review_player.setAudioOutput(self._review_audio_out)
+            self.review_vol.valueChanged.connect(
+                lambda v: self._review_audio_out.setVolume(max(0.0, min(1.0, v / 100.0)))
+            )
+            self._review_player.durationChanged.connect(self._on_review_media_duration)
+            self._review_player.positionChanged.connect(self._on_review_media_position)
+            self._review_player.playbackStateChanged.connect(self._on_review_playback_state_changed)
+        else:
+            self.review_vol.setEnabled(False)
+            self.review_vol.setToolTip("Audio playback unavailable (QtMultimedia not installed).")
+            self.review_play_btn.setToolTip("Audio playback unavailable (QtMultimedia not installed).")
+
+        player_layout.addWidget(self.review_play_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        player_layout.addWidget(self.review_seek, 1, Qt.AlignmentFlag.AlignVCenter)
+        player_layout.addWidget(self.review_time_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        player_layout.addWidget(self.review_vol, 0, Qt.AlignmentFlag.AlignVCenter)
+        info_layout.addWidget(player)
+
         layout.addWidget(info)
 
         # Main comparison area
@@ -550,13 +763,106 @@ class MainWindow(QMainWindow):
         layout.addLayout(btn_row)
         return page
 
+    @staticmethod
+    def _format_ms(ms: int) -> str:
+        ms = max(0, int(ms))
+        s = ms // 1000
+        m, s = divmod(s, 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h}:{m:02d}:{s:02d}"
+        return f"{m}:{s:02d}"
+
+    def _set_review_audio_source(self, audio_path: str) -> None:
+        ap = (audio_path or "").strip()
+        if ap == self._review_audio_path:
+            return
+        self._review_audio_path = ap
+
+        self.review_seek.setRange(0, 0)
+        self.review_seek.setValue(0)
+        self.review_seek.setEnabled(False)
+        self.review_play_btn.setEnabled(False)
+        self.review_time_lbl.setText("0:00 / 0:00")
+        self.review_play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
+        self.review_play_btn.setText("Play")
+
+        if self._review_player is None:
+            return
+
+        self._review_player.stop()
+        if not ap or not os.path.isfile(ap):
+            self._review_player.setSource(QUrl())
+            return
+
+        self._review_player.setSource(QUrl.fromLocalFile(ap))
+        self.review_seek.setEnabled(True)
+        self.review_play_btn.setEnabled(True)
+
+    def _on_review_play_pause_clicked(self):
+        if self._review_player is None:
+            return
+        if self._review_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._review_player.pause()
+        else:
+            self._review_player.play()
+
+    def _on_review_playback_state_changed(self, state):
+        icon = (
+            QStyle.StandardPixmap.SP_MediaPause
+            if state == QMediaPlayer.PlaybackState.PlayingState
+            else QStyle.StandardPixmap.SP_MediaPlay
+        )
+        self.review_play_btn.setIcon(self.style().standardIcon(icon))
+        self.review_play_btn.setText("Pause" if state == QMediaPlayer.PlaybackState.PlayingState else "Play")
+
+    def _on_review_media_duration(self, dur_ms: int):
+        self.review_seek.setRange(0, max(0, int(dur_ms)))
+        pos = 0 if self._review_player is None else int(self._review_player.position())
+        self.review_time_lbl.setText(f"{self._format_ms(pos)} / {self._format_ms(dur_ms)}")
+
+    def _on_review_media_position(self, pos_ms: int):
+        if not self.review_seek.isDragging():
+            self.review_seek.setValue(max(0, int(pos_ms)))
+        dur = 0 if self._review_player is None else int(self._review_player.duration())
+        self.review_time_lbl.setText(f"{self._format_ms(pos_ms)} / {self._format_ms(dur)}")
+
+    def _on_review_seek_preview(self, pos_ms: int):
+        dur = 0 if self._review_player is None else int(self._review_player.duration())
+        self.review_time_lbl.setText(f"{self._format_ms(pos_ms)} / {self._format_ms(dur)}")
+
+    def _on_review_seek_commit(self):
+        if self._review_player is None:
+            return
+        self._review_player.setPosition(int(self.review_seek.value()))
+
     def _build_settings_page(self) -> QFrame:
         page = QFrame()
         page.setObjectName("settings-page")
-        layout = QVBoxLayout(page)
+
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Centered column so settings are not stretched edge-to-edge on wide windows.
+        _SETTINGS_CONTENT_MAX_W = 720
+        center_row = QHBoxLayout()
+        center_row.setContentsMargins(0, 0, 0, 0)
+        center_row.addStretch(1)
+
+        content_host = QWidget()
+        content_host.setObjectName("settings-content-host")
+        content_host.setMaximumWidth(_SETTINGS_CONTENT_MAX_W)
+        content_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        layout = QVBoxLayout(content_host)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(16)
+        layout.setSpacing(10)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Shared grid: one label width + one field column width across all sections.
+        _SETTINGS_LABEL_W = 236
+        _SETTINGS_FIELD_MIN_W = 220
 
         title = QLabel("Settings")
         title.setObjectName("page-title")
@@ -564,80 +870,157 @@ class MainWindow(QMainWindow):
         subtitle.setObjectName("page-sub")
         layout.addWidget(title)
         layout.addWidget(subtitle)
-        layout.addSpacing(6)
+        layout.addSpacing(2)
 
-        card = QFrame()
-        card.setObjectName("settings-card")
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(16, 14, 16, 14)
-        card_layout.setSpacing(12)
+        def _make_label(text: str) -> QLabel:
+            lab = QLabel(text)
+            lab.setObjectName("settings-label")
+            lab.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            lab.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+            lab.setFixedWidth(_SETTINGS_LABEL_W)
+            return lab
 
-        # Appearance
-        section1 = QLabel("Appearance")
-        section1.setObjectName("section-title")
-        card_layout.addWidget(section1)
+        def _make_card(title_text: str) -> tuple[QFrame, QVBoxLayout]:
+            card = QFrame()
+            card.setObjectName("settings-card")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(14, 10, 14, 12)
+            card_layout.setSpacing(6)
+            section = QLabel(title_text)
+            section.setObjectName("section-title")
+            card_layout.addWidget(section)
+            return card, card_layout
+
+        def _make_form(parent: QWidget) -> QFormLayout:
+            form = QFormLayout()
+            form.setContentsMargins(0, 0, 0, 0)
+            form.setHorizontalSpacing(10)
+            form.setVerticalSpacing(6)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+            form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+            parent.setLayout(form)
+            return form
+
+        def _field_row(*widgets: QWidget, stretch_first: bool = True) -> QWidget:
+            w = QWidget()
+            row = QHBoxLayout(w)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
+            for i, ww in enumerate(widgets):
+                if i == 0 and stretch_first:
+                    row.addWidget(ww, 1, Qt.AlignmentFlag.AlignVCenter)
+                else:
+                    row.addWidget(ww, 0, Qt.AlignmentFlag.AlignVCenter)
+            return w
+
+        def _persist_settings_from_ui() -> None:
+            s = self._settings()
+            if hasattr(self, "default_diarization_checkbox"):
+                s.setValue(KEY_DEFAULT_DIARIZATION, bool(self.default_diarization_checkbox.isChecked()))
+            if hasattr(self, "default_speaker_spin"):
+                s.setValue(KEY_DEFAULT_NUM_SPEAKERS, int(self.default_speaker_spin.value()))
+            if hasattr(self, "default_timestamps_checkbox"):
+                s.setValue(KEY_DEFAULT_TIMESTAMPS, bool(self.default_timestamps_checkbox.isChecked()))
+            if hasattr(self, "default_translation_combo"):
+                s.setValue(KEY_DEFAULT_TRANSLATION, str(self.default_translation_combo.currentText()))
+            if hasattr(self, "output_folder_edit"):
+                s.setValue(KEY_OUTPUT_FOLDER, str(self.output_folder_edit.text()).strip())
+            if hasattr(self, "auto_open_output_checkbox"):
+                s.setValue(KEY_AUTO_OPEN_OUTPUT, bool(self.auto_open_output_checkbox.isChecked()))
+
+        # ── Appearance card ──────────────────────────────────────────────────
+        appearance_card, appearance_layout = _make_card("Appearance")
+        appearance_body = QWidget()
+        appearance_form = _make_form(appearance_body)
 
         self.dark_mode_checkbox = QCheckBox("Enable dark mode")
         self.dark_mode_checkbox.setObjectName("theme-toggle")
         theme = self._settings().value(KEY_THEME, THEME_LIGHT)
         self.dark_mode_checkbox.setChecked(theme == THEME_DARK)
         self.dark_mode_checkbox.toggled.connect(self._on_dark_mode_toggled)
-        card_layout.addWidget(self.dark_mode_checkbox)
+        appearance_form.addRow(self.dark_mode_checkbox)
 
-        # Defaults
-        section2 = QLabel("Job defaults")
-        section2.setObjectName("section-title")
-        card_layout.addWidget(section2)
+        appearance_layout.addWidget(appearance_body)
+        layout.addWidget(appearance_card)
+
+        # ── Job defaults card ───────────────────────────────────────────────
+        defaults_card, defaults_layout = _make_card("Job defaults")
+        defaults_body = QWidget()
+        defaults_form = _make_form(defaults_body)
+        defaults_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self.default_diarization_checkbox = QCheckBox("Enable speaker diarization by default")
-        self.default_diarization_checkbox.setChecked(bool(self._settings().value(KEY_DEFAULT_DIARIZATION, True, type=bool)))
+        self.default_diarization_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.default_diarization_checkbox.setChecked(
+            bool(self._settings().value(KEY_DEFAULT_DIARIZATION, True, type=bool))
+        )
         self.default_diarization_checkbox.toggled.connect(self._on_default_diarization_toggled)
-        card_layout.addWidget(self.default_diarization_checkbox)
+        dia_row = QWidget()
+        dia_lay = QHBoxLayout(dia_row)
+        dia_lay.setContentsMargins(0, 0, 0, 4)
+        dia_lay.setSpacing(0)
+        dia_lay.addWidget(self.default_diarization_checkbox, 0, Qt.AlignmentFlag.AlignLeft)
+        dia_lay.addStretch(1)
+        defaults_form.addRow(_make_label(""), dia_row)
 
-        def_spk_row = QHBoxLayout()
-        def_spk_label = QLabel("Default number of speakers:")
-        def_spk_label.setObjectName("settings-label")
         self.default_speaker_spin = QSpinBox()
+        self.default_speaker_spin.setObjectName("settings-input")
         self.default_speaker_spin.setRange(1, 32)
         self.default_speaker_spin.setValue(
             max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
         )
-        self.default_speaker_spin.setFixedWidth(72)
+        self.default_speaker_spin.setMinimumWidth(_SETTINGS_FIELD_MIN_W)
         self.default_speaker_spin.valueChanged.connect(
             lambda v: self._settings().setValue(KEY_DEFAULT_NUM_SPEAKERS, int(v))
         )
-        def_spk_row.addWidget(def_spk_label)
-        def_spk_row.addStretch()
-        def_spk_row.addWidget(self.default_speaker_spin)
-        card_layout.addLayout(def_spk_row)
         self.default_speaker_spin.setEnabled(self.default_diarization_checkbox.isChecked())
+        defaults_form.addRow(_make_label("Default number of speakers:"), self.default_speaker_spin)
 
-        self.default_timestamps_checkbox = QCheckBox("Show timestamps by default (per segment)")
-        self.default_timestamps_checkbox.setChecked(bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool)))
+        self.default_translation_combo = QComboBox()
+        self.default_translation_combo.setObjectName("settings-input")
+        self.default_translation_combo.setFixedWidth(_SETTINGS_FIELD_MIN_W)
+        self.default_translation_combo.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        )
+        self.default_translation_combo.addItems(["None", "Auto → English"])
+        self.default_translation_combo.setCurrentText(
+            str(self._settings().value(KEY_DEFAULT_TRANSLATION, "None"))
+        )
+        self.default_translation_combo.currentTextChanged.connect(
+            lambda t: self._settings().setValue(KEY_DEFAULT_TRANSLATION, str(t))
+        )
+        defaults_form.addRow(_make_label("Translation mode:"), self.default_translation_combo)
+
+        # Label in the form column + bare checkbox avoids long caption clipping in QCheckBox.
+        self.default_timestamps_checkbox = QCheckBox()
+        self.default_timestamps_checkbox.setAccessibleName("Timestamps")
+        self.default_timestamps_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.default_timestamps_checkbox.setToolTip(
+            "When enabled, new jobs use per-segment timestamps by default."
+        )
+        self.default_timestamps_checkbox.setChecked(
+            bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool))
+        )
         self.default_timestamps_checkbox.toggled.connect(
             lambda v: self._settings().setValue(KEY_DEFAULT_TIMESTAMPS, bool(v))
         )
-        card_layout.addWidget(self.default_timestamps_checkbox)
+        ts_label = _make_label("Timestamps")
+        ts_label.setBuddy(self.default_timestamps_checkbox)
+        defaults_form.addRow(ts_label, self.default_timestamps_checkbox)
 
-        # Translation mode (fixed to current backend behavior).
-        tr_row = QHBoxLayout()
-        tr_label = QLabel("Translation mode:")
-        tr_label.setObjectName("settings-label")
-        tr_value = QLabel("Spanish → English")
-        tr_value.setObjectName("settings-label")
-        tr_row.addWidget(tr_label)
-        tr_row.addStretch()
-        tr_row.addWidget(tr_value)
-        card_layout.addLayout(tr_row)
+        defaults_layout.addWidget(defaults_body)
+        layout.addWidget(defaults_card)
 
-        # Output behavior
-        section3 = QLabel("Output")
-        section3.setObjectName("section-title")
-        card_layout.addWidget(section3)
+        # ── Output card ─────────────────────────────────────────────────────
+        output_card, output_layout = _make_card("Output")
+        output_body = QWidget()
+        output_form = _make_form(output_body)
 
-        out_row = QHBoxLayout()
-        out_label = QLabel("Default output folder:")
-        out_label.setObjectName("settings-label")
         self.output_folder_edit = QLineEdit()
         self.output_folder_edit.setObjectName("settings-input")
         self.output_folder_edit.setPlaceholderText("Choose a folder…")
@@ -645,53 +1028,94 @@ class MainWindow(QMainWindow):
         self.output_folder_edit.textChanged.connect(
             lambda t: self._settings().setValue(KEY_OUTPUT_FOLDER, t.strip())
         )
+        self.output_folder_edit.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.output_folder_edit.setMinimumWidth(max(280, _SETTINGS_FIELD_MIN_W))
+
         browse_btn = QPushButton("Browse…")
         browse_btn.setObjectName("add-btn")
+        # Minimum width policy: fixed 88px was narrower than add-btn padding + label (text clipped).
+        browse_btn.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         browse_btn.clicked.connect(self._browse_output_folder)
-        out_row.addWidget(out_label)
-        out_row.addWidget(self.output_folder_edit, stretch=1)
-        out_row.addWidget(browse_btn)
-        card_layout.addLayout(out_row)
+
+        folder_field = _field_row(self.output_folder_edit, browse_btn, stretch_first=True)
+        folder_field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        output_form.addRow(_make_label("Default output folder:"), folder_field)
 
         self.auto_open_output_checkbox = QCheckBox("Auto-open output folder when a job completes")
-        self.auto_open_output_checkbox.setChecked(bool(self._settings().value(KEY_AUTO_OPEN_OUTPUT, False, type=bool)))
+        self.auto_open_output_checkbox.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.auto_open_output_checkbox.setChecked(
+            bool(self._settings().value(KEY_AUTO_OPEN_OUTPUT, False, type=bool))
+        )
         self.auto_open_output_checkbox.toggled.connect(
             lambda v: self._settings().setValue(KEY_AUTO_OPEN_OUTPUT, bool(v))
         )
-        card_layout.addWidget(self.auto_open_output_checkbox)
+        auto_open_row = QWidget()
+        auto_open_lay = QHBoxLayout(auto_open_row)
+        auto_open_lay.setContentsMargins(0, 2, 0, 0)
+        auto_open_lay.setSpacing(0)
+        auto_open_lay.addWidget(self.auto_open_output_checkbox, 0, Qt.AlignmentFlag.AlignLeft)
+        auto_open_lay.addStretch(1)
+        output_form.addRow(_make_label(""), auto_open_row)
 
-        # Hugging Face token
-        section4 = QLabel("Integration")
-        section4.setObjectName("section-title")
-        card_layout.addWidget(section4)
+        output_layout.addWidget(output_body)
+        layout.addWidget(output_card)
 
-        hf_row = QHBoxLayout()
-        hf_label = QLabel("Hugging Face token:")
-        hf_label.setObjectName("settings-label")
+        # ── Integration card ────────────────────────────────────────────────
+        integration_card, integration_layout = _make_card("Integration")
+        integration_body = QWidget()
+        integration_form = _make_form(integration_body)
+
         self.hf_token_edit = QLineEdit()
         self.hf_token_edit.setObjectName("settings-input")
+        self.hf_token_edit.setMinimumWidth(_SETTINGS_FIELD_MIN_W)
         self.hf_token_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self._load_hf_token_into_field()
+
         hf_save_btn = QPushButton("Save")
         hf_save_btn.setObjectName("add-btn")
         hf_save_btn.setFixedWidth(72)
         hf_save_btn.clicked.connect(self._save_hf_token_from_field)
+
         hf_clear_btn = QPushButton("Clear")
         hf_clear_btn.setObjectName("add-btn")
         hf_clear_btn.setFixedWidth(72)
         hf_clear_btn.clicked.connect(self._clear_hf_token)
-        hf_row.addWidget(hf_label)
-        hf_row.addWidget(self.hf_token_edit, stretch=1)
-        hf_row.addWidget(hf_save_btn)
-        hf_row.addWidget(hf_clear_btn)
-        card_layout.addLayout(hf_row)
+
+        integration_form.addRow(
+            _make_label("Hugging Face token:"),
+            _field_row(self.hf_token_edit, hf_save_btn, hf_clear_btn, stretch_first=True),
+        )
 
         hf_note = QLabel("Stored securely in your OS keychain.")
-        hf_note.setObjectName("settings-label")
-        card_layout.addWidget(hf_note)
+        hf_note.setObjectName("settings-hint")
+        integration_form.addRow(_make_label(""), hf_note)
 
-        layout.addWidget(card)
+        integration_layout.addWidget(integration_body)
+        layout.addWidget(integration_card)
+
+        # ── Bottom actions ──────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(10)
+        btn_row.addStretch(1)
+
+        save_btn = QPushButton("Save settings")
+        save_btn.setObjectName("start-btn")
+        save_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        save_btn.setFixedWidth(140)
+        save_btn.clicked.connect(_persist_settings_from_ui)
+        btn_row.addWidget(save_btn, 0, Qt.AlignmentFlag.AlignRight)
+
+        layout.addLayout(btn_row)
         layout.addStretch()
+
+        center_row.addWidget(content_host, 0, Qt.AlignmentFlag.AlignTop)
+        center_row.addStretch(1)
+        outer.addLayout(center_row, 1)
         return page
 
     def _on_default_diarization_toggled(self, checked: bool):
@@ -905,7 +1329,9 @@ class MainWindow(QMainWindow):
             return
         log_edit.setVisible(expanded)
         if expand_btn is not None:
-            expand_btn.setText("▼" if expanded else "▶")
+            col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+            expand_btn.setIcon(make_log_output_icon(size=14, color_hex=col))
+            expand_btn.setIconSize(QSize(14, 14))
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
 
@@ -987,27 +1413,30 @@ class MainWindow(QMainWindow):
     def _build_home_filename_cell(self, fname: str, path_key: str) -> QWidget:
         outer = QWidget()
         outer.setObjectName("home-filename-cell")
+        # Ensure the cell container itself is visually transparent so the
+        # table row background is the only background that shows through.
+        outer.setAutoFillBackground(False)
+        outer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        outer.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
         outer._path_key = path_key  # type: ignore[attr-defined]
         outer._fname = fname  # type: ignore[attr-defined]
         outer_layout = QVBoxLayout(outer)
         outer_layout.setContentsMargins(4, 4, 4, 4)
         outer_layout.setSpacing(4)
+        outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        expand_btn = QToolButton()
-        expand_btn.setCheckable(True)
-        expand_btn.setText("▶")
-        expand_btn.setFixedSize(26, 26)
-        expand_btn.setToolTip("Show or hide log for this file")
         fn_lab = QLabel(fname)
         fn_lab.setWordWrap(False)
         fn_lab.setStyleSheet("font-weight: 600;")
         name_inner = QHBoxLayout()
         name_inner.setSpacing(6)
         name_inner.setContentsMargins(0, 0, 0, 0)
-        name_inner.addWidget(expand_btn, alignment=Qt.AlignmentFlag.AlignVCenter)
         name_inner.addWidget(fn_lab, alignment=Qt.AlignmentFlag.AlignVCenter)
         name_block = QWidget()
         name_block.setLayout(name_inner)
+        name_block.setAutoFillBackground(False)
+        name_block.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        name_block.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
 
         name_row = QHBoxLayout()
         name_row.setContentsMargins(0, 0, 0, 0)
@@ -1027,16 +1456,20 @@ class MainWindow(QMainWindow):
         log_edit.setFont(font)
 
         outer._log_edit = log_edit  # type: ignore[attr-defined]
-        outer._expand_btn = expand_btn  # type: ignore[attr-defined]
-        expand_btn.toggled.connect(lambda on, o=outer: self._toggle_log_visibility(o, on))
 
         outer_layout.addLayout(name_row)
         outer_layout.addWidget(log_edit)
+        # Absorb extra row height below the log so the name + log block stays top-anchored.
+        outer_layout.addStretch(1)
         return outer
 
     def _build_jobs_filename_cell(self, fname: str) -> QWidget:
         """Filename column for Jobs: same bold label as Home, without expand/log."""
         w = QWidget()
+        # Keep this cell visually flat so only the Jobs table/card background shows.
+        w.setAutoFillBackground(False)
+        w.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        w.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
         lay = QVBoxLayout(w)
         lay.setContentsMargins(4, 4, 4, 4)
         lay.setSpacing(0)
@@ -1050,6 +1483,10 @@ class MainWindow(QMainWindow):
     def _build_jobs_output_folder_cell(self, folder_display: str, path_key: str) -> QWidget:
         """Output path + compact folder button on the right (same open logic as Home)."""
         w = QWidget()
+        # Flat, transparent container so the table/card background remains the only fill.
+        w.setAutoFillBackground(False)
+        w.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        w.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
         lay = QHBoxLayout(w)
         lay.setContentsMargins(6, 4, 6, 4)
         lay.setSpacing(8)
@@ -1072,21 +1509,26 @@ class MainWindow(QMainWindow):
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return w
 
-    def _build_home_folder_cell(self, path_key: str) -> QWidget:
-        """Separate cell from Status: folder action only (same open behavior)."""
+    def _build_home_folder_cell(self, path_key: str, filename_cell: QWidget) -> QWidget:
+        """Far-right actions: open folder (left), then log/details toggle (right)."""
         wrap = QWidget()
         wrap.setObjectName("home-folder-cell")
-        wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        wrap.setAutoFillBackground(False)
+        wrap.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        wrap.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
+        wrap.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         lay = QHBoxLayout(wrap)
-        # Slightly larger right inset shifts the layout-centered 22px hit target left so the
-        # SP_DirOpenIcon pixmap (often uneven transparent padding; glyph reads right in the box) looks centered.
-        lay.setContentsMargins(7, 4, 9, 4)
-        lay.setSpacing(0)
+        lay.setContentsMargins(4, 4, 8, 4)
+        lay.setSpacing(6)
+        lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        _muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+
         btn = QToolButton()
         btn.setObjectName("home-row-open-btn")
         btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        btn.setIcon(make_folder_open_icon(size=14, color_hex=_muted))
         btn.setIconSize(QSize(14, 14))
         btn.setFixedSize(22, 22)
         btn.setToolTip("Open output folder")
@@ -1094,17 +1536,38 @@ class MainWindow(QMainWindow):
         btn.setAutoRaise(True)
         pk = path_key.strip() if path_key else ""
         btn.clicked.connect(lambda _=False, p=pk: self._open_home_row_output_folder(p))
-        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignCenter)
+
+        log_btn = QToolButton()
+        log_btn.setObjectName("home-row-log-btn")
+        log_btn.setCheckable(True)
+        log_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        log_btn.setText("")
+        log_btn.setIcon(make_log_output_icon(size=14, color_hex=_muted))
+        log_btn.setIconSize(QSize(14, 14))
+        log_btn.setFixedSize(22, 22)
+        log_btn.setToolTip("Show or hide log for this file")
+        log_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        log_btn.setAutoRaise(True)
+        filename_cell._expand_btn = log_btn  # type: ignore[attr-defined]
+        log_btn.toggled.connect(lambda on, o=filename_cell: self._toggle_log_visibility(o, on))
+
+        lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(log_btn, 0, Qt.AlignmentFlag.AlignTop)
         return wrap
 
     def _build_home_status_cell(self, status: str) -> QWidget:
         sw = QWidget()
         sw.setObjectName("home-status-cell")
+        sw.setAutoFillBackground(False)
+        sw.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        sw.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
+        sw.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         vl = QVBoxLayout(sw)
         vl.setContentsMargins(6, 4, 6, 4)
         vl.setSpacing(6)
+        vl.setAlignment(Qt.AlignmentFlag.AlignTop)
         st_lbl = QLabel(status)
-        st_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        st_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
@@ -1112,6 +1575,7 @@ class MainWindow(QMainWindow):
         bar.setFixedHeight(5)
         vl.addWidget(st_lbl)
         vl.addWidget(bar)
+        vl.addStretch(1)
         sw._status_lbl = st_lbl  # type: ignore[attr-defined]
         sw._progress_bar = bar  # type: ignore[attr-defined]
         pct = 100 if status == "Complete" else 0
@@ -1152,7 +1616,7 @@ class MainWindow(QMainWindow):
         path_key = full_path.strip() if full_path else fname
 
         dur_item = QTableWidgetItem(duration)
-        dur_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
+        dur_item.setTextAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self.table.setItem(row, 0, dur_item)
 
         col1 = self._build_home_filename_cell(fname, path_key)
@@ -1160,7 +1624,7 @@ class MainWindow(QMainWindow):
 
         col2 = self._build_home_status_cell(status)
         self.table.setCellWidget(row, 2, col2)
-        self.table.setCellWidget(row, 3, self._build_home_folder_cell(path_key))
+        self.table.setCellWidget(row, 3, self._build_home_folder_cell(path_key, col1))
 
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
@@ -1468,6 +1932,7 @@ class MainWindow(QMainWindow):
         payload = {
             "version": 1,
             "source_basename": os.path.basename(full_path.strip()),
+            "source_full_path": os.path.abspath(full_path.strip()) if full_path else "",
             "stem": stem,
             "spanish_basename": os.path.basename(dst_spanish) if dst_spanish else "",
             "english_basename": os.path.basename(dst_english) if dst_english else "",
@@ -1559,6 +2024,7 @@ class MainWindow(QMainWindow):
                     {
                         "label": fname,
                         "folder": job_out,
+                        "audio_path": (rec.get("full_path") or "").strip(),
                         "spanish_path": rec.get("spanish_path", ""),
                         "english_path": rec.get("english_path", ""),
                     }
@@ -1587,10 +2053,18 @@ class MainWindow(QMainWindow):
                 groups.setdefault(key, {})["folder"] = out_dir
             for key, g in groups.items():
                 if g.get("spanish_path") or g.get("english_path"):
+                    # Try to recover original audio path from sidecar meta (when available).
+                    meta = self._read_transcription_meta(out_dir, key)
+                    ap = ""
+                    if meta:
+                        ap = str(meta.get("source_full_path") or "").strip()
+                        if ap and not os.path.isfile(ap):
+                            ap = ""
                     items.append(
                         {
                             "label": self._review_display_name(out_dir, key),
                             "folder": g.get("folder", out_dir),
+                            "audio_path": ap,
                             "spanish_path": g.get("spanish_path", ""),
                             "english_path": g.get("english_path", ""),
                         }
@@ -1648,6 +2122,9 @@ class MainWindow(QMainWindow):
             if hasattr(self, "english_preview"):
                 self.english_preview.setPlainText("")
             return
+
+        # Load audio for the selected Review item (if available).
+        self._set_review_audio_source(it.get("audio_path", ""))
 
         folder = it.get("folder", "")
         sp = it.get("spanish_path", "")
