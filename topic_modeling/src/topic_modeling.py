@@ -8,6 +8,8 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
+from hdbscan import HDBSCAN
+from umap import UMAP
 
 # load cleaned transcript data from csv
 def load_data(file_path):
@@ -23,9 +25,6 @@ def load_data(file_path):
         df["include_in_topic_model"] = df["include_in_topic_model"].astype(str).str.lower()
         df = df[df["include_in_topic_model"].isin(["true"])].copy()
 
-    # remove very short segments for line-based testing
-    df = df[df["cleaned_text"].str.len() >= 15].reset_index(drop=True)
-
     if df.empty:
         raise ValueError("No usable transcript segments found")
 
@@ -39,17 +38,35 @@ def generate_embeddings(documents):
     embeddings = model.encode(documents, show_progress_bar=True)
     return embeddings
 
-# build BERTopic model with CountVectorizer for keyword extraction
+# build topic model
 def build_topic_model():
-    vectorizer_model = CountVectorizer(stop_words="english")
-    
+    vectorizer_model = CountVectorizer(stop_words="english", ngram_range=(1,2), min_df=2)
+
+    umap_model = UMAP(
+        n_neighbors=5,
+        n_components=5,
+        min_dist=0.0,
+        metric="cosine",
+        random_state=42
+    )
+
+    hdbscan_model = HDBSCAN(
+        min_cluster_size=4,
+        min_samples=2,
+        metric="euclidean",
+        prediction_data=True
+    )
+
     topic_model = BERTopic(
         vectorizer_model=vectorizer_model,
+        umap_model=umap_model,
+        hdbscan_model=hdbscan_model,
+        nr_topics=8,
         verbose=True
     )
 
     return topic_model
-
+    
 # run BERTopic clustering on transcript segments
 def run_topic_model(documents, embeddings):
     topic_model = build_topic_model()
@@ -138,7 +155,7 @@ def generate_label_with_ollama(topic_entry, model_name="llama3.1"):
     prompt = f"""
 You are labeling a topic from interview transcript analysis.
 
-Create a short, human-readable topic label in 3 to 8 words.
+Create a short, human-readable topic label in 3 to 5 words.
 Do not use quotation marks.
 Do not explain your answer.
 Return only the label.
@@ -190,6 +207,9 @@ def add_llm_labels(topic_summary, model_name="llama3.1"):
 def print_topic_summary(topic_model, topic_summary):
     topic_info = topic_model.get_topic_info()
 
+    def truncate(text, max_len=200):
+        return text[:max_len] + "..." if len(text) > max_len else text
+
     print("\n=== Topic Overview ===")
     print(topic_info)
 
@@ -200,7 +220,7 @@ def print_topic_summary(topic_model, topic_summary):
         print(f"Keywords: {', '.join(entry['keywords'])}")
         print("Examples:")
         for example in entry["examples"]:
-            print(f"  - {example}")
+            print(f"  - {truncate(example)}")
 
 # handles command-line input, runs topic modeling, and saves outputs
 if __name__ == "__main__":

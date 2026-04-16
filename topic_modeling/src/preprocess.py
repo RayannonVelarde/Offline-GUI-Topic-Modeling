@@ -4,27 +4,28 @@ import os
 import pandas as pd
 from pathlib import Path
 
-# extract speaker label and timestamp if present
+# extract timestamp and speaker label if present
 def extract_metadata(line):
     speaker = None
     timestamp = None
 
-    speaker_match = re.match(r"^\s*([^:]+):\s*", line)
+    timestamp_match = re.search(r"\[?(\d{2}:\d{2}:\d{2})\]?", line)
+    if timestamp_match:
+        timestamp = timestamp_match.group(1)
+    line_no_time = re.sub(r"\[?\d{2}:\d{2}:\d{2}\]?\s*", "", line)
+
+    speaker_match = re.match(r"^\s*\[?([^\]:]+)\]?:\s*", line_no_time)
     if speaker_match:
         speaker = speaker_match.group(1).strip()
 
-    timestamp_match = re.search(r"\d{2}:\d{2}:\d{2}", line)
-    if timestamp_match:
-        timestamp = timestamp_match.group(0)
-
     return speaker, timestamp
 
-# remove speaker labels and timestamps from transcript text
+# remove timestamps and speaker labels
 def clean_text(line):
-    line = re.sub(r"^\s*[^:]+:\s*", "", line)
-    line = re.sub(r"\d{2}:\d{2}:\d{2}", "", line)
+    line = re.sub(r"\[?\d{2}:\d{2}:\d{2}\]?\s*", "", line)
+    line = re.sub(r"^\s*\[?[^\]:]+\]?:\s*", "", line)
     return line.strip()
-    
+
 # assign interview role based on chosen interviewer speaker
 def assign_role(speaker, interviewer_speaker):
     if speaker == interviewer_speaker:
@@ -34,16 +35,22 @@ def assign_role(speaker, interviewer_speaker):
 # process one transcript file and return a cleaned dataframe
 def preprocess_transcript(file_path, interviewer_speaker=None):
     data = []
+    current_segment = None
+    segment_id = 0
 
     with open(file_path, "r", encoding="utf-8") as f:
-        for i, line in enumerate(f):
+        for line in f:
             line = line.strip()
             if not line:
                 continue
 
-            speaker, timestamp = extract_metadata(line)
+            speaker, _ = extract_metadata(line)
             cleaned = clean_text(line)
-            
+
+            if not cleaned:
+                continue
+
+            # assign role
             if interviewer_speaker is None:
                 role = "participant"
                 include_in_topic_model = True
@@ -51,15 +58,37 @@ def preprocess_transcript(file_path, interviewer_speaker=None):
                 role = assign_role(speaker, interviewer_speaker)
                 include_in_topic_model = role == "participant"
 
-            data.append({
-                "segment_id": i,
-                "speaker": speaker,
-                "timestamp": timestamp,
-                "role": role,
-                "include_in_topic_model": include_in_topic_model,
-                "cleaned_text": cleaned,
-                "source_file": os.path.basename(file_path)
-            })
+            # start first segment
+            if current_segment is None:
+                current_segment = {
+                    "segment_id": segment_id,
+                    "speaker": speaker,
+                    "role": role,
+                    "include_in_topic_model": include_in_topic_model,
+                    "cleaned_text": cleaned,
+                    "source_file": os.path.basename(file_path)
+                }
+                continue
+
+            # group consecutive lines by speaker into one segment (speaker-turn chunking)
+            if speaker == current_segment["speaker"]:
+                current_segment["cleaned_text"] += " " + cleaned
+            else:
+                data.append(current_segment)
+                segment_id += 1
+
+                current_segment = {
+                    "segment_id": segment_id,
+                    "speaker": speaker,
+                    "role": role,
+                    "include_in_topic_model": include_in_topic_model,
+                    "cleaned_text": cleaned,
+                    "source_file": os.path.basename(file_path)
+                }
+
+    # save last segment
+    if current_segment is not None:
+        data.append(current_segment)
 
     return pd.DataFrame(data)
     
@@ -76,7 +105,7 @@ def preprocess_input(input_path, interviewer_speaker=None):
         df = preprocess_transcript(input_path, interviewer_speaker)
 
         name_only = input_path.stem
-        output_file = f"../output/cleaned_{name_only}.csv"
+        output_file = f"../output/{name_only}.csv"
 
         df.to_csv(output_file, index=False)
         print(f"Preprocessed transcript saved to {output_file}")
@@ -99,7 +128,7 @@ def preprocess_input(input_path, interviewer_speaker=None):
             df = preprocess_transcript(file, interviewer_speaker)
 
             name_only = file.stem
-            output_file = f"../output/cleaned_{name_only}.csv"
+            output_file = f"../output/{name_only}.csv"
             df.to_csv(output_file, index=False)
 
             print(f"Processed {file.name}")
@@ -109,7 +138,7 @@ def preprocess_input(input_path, interviewer_speaker=None):
         combined_df = pd.concat(all_dfs, ignore_index=True)
 
         folder_name = input_path.name
-        combined_output = f"../output/cleaned_{folder_name}.csv"
+        combined_output = f"../output/{folder_name}.csv"
 
         combined_df.to_csv(combined_output, index=False)
 
