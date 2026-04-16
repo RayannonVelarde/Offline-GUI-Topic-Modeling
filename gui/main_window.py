@@ -350,6 +350,7 @@ class MainWindow(QMainWindow):
             qapp.setStyleSheet(get_stylesheet(theme))
         self._refresh_nav_icons()
         self._refresh_home_folder_row_icons()
+        self._refresh_jobs_folder_row_icons()
         self._refresh_home_log_disclosure_icons()
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
@@ -376,6 +377,22 @@ class MainWindow(QMainWindow):
                 continue
             for btn in w.findChildren(QToolButton):
                 if btn.objectName() == "home-row-open-btn":
+                    btn.setIcon(make_folder_open_icon(size=icon_sz, color_hex=inactive))
+                    btn.setIconSize(QSize(icon_sz, icon_sz))
+                    break
+
+    def _refresh_jobs_folder_row_icons(self) -> None:
+        """Match Jobs table folder buttons to Home stroke folder icon / theme color."""
+        if not hasattr(self, "jobs_table"):
+            return
+        inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        for r in range(self.jobs_table.rowCount()):
+            w = self.jobs_table.cellWidget(r, 3)
+            if w is None:
+                continue
+            for btn in w.findChildren(QToolButton):
+                if btn.objectName() == "jobs-row-open-btn":
                     btn.setIcon(make_folder_open_icon(size=icon_sz, color_hex=inactive))
                     btn.setIconSize(QSize(icon_sz, icon_sz))
                     break
@@ -1498,7 +1515,10 @@ class MainWindow(QMainWindow):
         lay.addWidget(path_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
         btn = QToolButton()
         btn.setObjectName("jobs-row-open-btn")
-        btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon))
+        btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        _folder_muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        btn.setIcon(make_folder_open_icon(size=14, color_hex=_folder_muted))
         btn.setIconSize(QSize(14, 14))
         btn.setFixedSize(22, 22)
         btn.setToolTip("Open output folder")
