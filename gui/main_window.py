@@ -33,11 +33,17 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QSlider,
+    QMenu,
 )
 
 from widgets import DropZone
 from stylesheet import THEME_DARK, THEME_LIGHT, get_stylesheet
-from nav_icons import make_folder_open_icon, make_log_output_icon, make_nav_icon
+from nav_icons import (
+    make_disclosure_chevron_icon,
+    make_folder_open_icon,
+    make_log_output_icon,
+    make_nav_icon,
+)
 
 try:
     from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -352,7 +358,18 @@ class MainWindow(QMainWindow):
         self._refresh_home_folder_row_icons()
         self._refresh_jobs_folder_row_icons()
         self._refresh_home_log_disclosure_icons()
+        self._refresh_settings_disclosure_icons()
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
+
+    def _refresh_settings_disclosure_icons(self) -> None:
+        """Update Settings chevron icons when theme changes."""
+        btn = getattr(self, "default_translation_chevron_btn", None)
+        if btn is None:
+            return
+        col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        btn.setIcon(make_disclosure_chevron_icon(expanded=True, size=icon_sz, color_hex=col))
+        btn.setIconSize(QSize(icon_sz, icon_sz))
 
     def _refresh_nav_icons(self):
         if not self._nav_buttons:
@@ -996,20 +1013,83 @@ class MainWindow(QMainWindow):
         self.default_speaker_spin.setEnabled(self.default_diarization_checkbox.isChecked())
         defaults_form.addRow(_make_label("Default number of speakers:"), self.default_speaker_spin)
 
-        self.default_translation_combo = QComboBox()
-        self.default_translation_combo.setObjectName("settings-input")
-        self.default_translation_combo.setFixedWidth(_SETTINGS_FIELD_MIN_W)
-        self.default_translation_combo.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        # Translation mode dropdown (aesthetic): opens ONLY via chevron click.
+        self.default_translation_options = [
+            "Auto → English",
+            "Auto → Spanish",
+            "Auto → French",
+            "Auto → German",
+            "Auto → Portuguese",
+            "Auto → Italian",
+            "None",
+        ]
+        current_translation = str(
+            self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto → English")
         )
-        self.default_translation_combo.addItems(["None", "Auto → English"])
-        self.default_translation_combo.setCurrentText(
-            str(self._settings().value(KEY_DEFAULT_TRANSLATION, "None"))
+        if current_translation not in self.default_translation_options:
+            current_translation = "Auto → English"
+
+        translation_field = QFrame()
+        translation_field.setObjectName("settings-input")
+        translation_field.setFixedWidth(_SETTINGS_FIELD_MIN_W)
+        translation_field.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+
+        translation_lay = QHBoxLayout(translation_field)
+        translation_lay.setContentsMargins(0, 0, 0, 0)
+        translation_lay.setSpacing(8)
+
+        self.default_translation_value = QLabel(current_translation)
+        self.default_translation_value.setObjectName("settings-dropdown-value")
+        self.default_translation_value.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
-        self.default_translation_combo.currentTextChanged.connect(
-            lambda t: self._settings().setValue(KEY_DEFAULT_TRANSLATION, str(t))
+        self.default_translation_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.NoTextInteraction
         )
-        defaults_form.addRow(_make_label("Translation mode:"), self.default_translation_combo)
+        self.default_translation_value.setAlignment(
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        )
+
+        self.default_translation_chevron_btn = QToolButton()
+        self.default_translation_chevron_btn.setObjectName("settings-chevron-btn")
+        self.default_translation_chevron_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.default_translation_chevron_btn.setAutoRaise(True)
+        self.default_translation_chevron_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.default_translation_chevron_btn.setFixedSize(24, 24)
+
+        col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        self.default_translation_chevron_btn.setIcon(
+            make_disclosure_chevron_icon(expanded=True, size=icon_sz, color_hex=col)
+        )
+        self.default_translation_chevron_btn.setIconSize(QSize(icon_sz, icon_sz))
+
+        self.default_translation_menu = QMenu(self)
+        for opt in self.default_translation_options:
+            act = self.default_translation_menu.addAction(opt)
+            act.setData(opt)
+
+        def _set_translation_mode(text: str) -> None:
+            self.default_translation_value.setText(text)
+            self._settings().setValue(KEY_DEFAULT_TRANSLATION, str(text))
+
+        def _open_translation_menu() -> None:
+            gp = self.default_translation_chevron_btn.mapToGlobal(
+                QPoint(0, self.default_translation_chevron_btn.height())
+            )
+            self.default_translation_menu.popup(gp)
+
+        self.default_translation_menu.triggered.connect(
+            lambda a: _set_translation_mode(str(a.data()))
+        )
+        self.default_translation_chevron_btn.clicked.connect(_open_translation_menu)
+
+        translation_lay.addWidget(self.default_translation_value, 1)
+        translation_lay.addWidget(
+            self.default_translation_chevron_btn, 0, Qt.AlignmentFlag.AlignRight
+        )
+
+        defaults_form.addRow(_make_label("Translation mode:"), translation_field)
 
         # Label in the form column + bare checkbox avoids long caption clipping in QCheckBox.
         self.default_timestamps_checkbox = QCheckBox()

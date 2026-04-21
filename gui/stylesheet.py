@@ -127,6 +127,18 @@ QComboBox#settings-input QAbstractItemView {
     selection-color: #0f172a;
 }
 
+QToolButton#settings-chevron-btn {
+    border: none;
+    background: transparent;
+    padding: 0px;
+}
+QToolButton#settings-chevron-btn:hover {
+    background: transparent;
+}
+QToolButton#settings-chevron-btn:pressed {
+    background: transparent;
+}
+
 QSpinBox#settings-input {
     padding: 7px 10px;
 }
