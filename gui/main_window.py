@@ -2,8 +2,8 @@ import json
 import os
 import time
 import keyring
-from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer
-from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor, QPainter, QPen
+from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer, QEvent
+from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QSlider,
     QMenu,
+    QScrollBar,
 )
 
 from widgets import DropZone
@@ -490,6 +491,50 @@ class MainWindow(QMainWindow):
 
         # Apply persisted theme (LIGHT by default)
         self.apply_theme(self._settings().value(KEY_THEME, THEME_LIGHT))
+
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def closeEvent(self, event):
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        super().closeEvent(event)
+
+    def eventFilter(self, watched, event) -> bool:
+        """On Home, clear file-table selection when clicking outside a row (not only the duration cell)."""
+        if event.type() != QEvent.Type.MouseButtonPress:
+            return super().eventFilter(watched, event)
+        if not isinstance(event, QMouseEvent):
+            return super().eventFilter(watched, event)
+        if event.button() != Qt.MouseButton.LeftButton:
+            return super().eventFilter(watched, event)
+        if getattr(self, "_current_page", "") != "home":
+            return super().eventFilter(watched, event)
+        table = getattr(self, "table", None)
+        if table is None:
+            return super().eventFilter(watched, event)
+        pos = event.globalPosition().toPoint()
+        w = QApplication.widgetAt(pos)
+        if w is None:
+            return super().eventFilter(watched, event)
+        start_btn = getattr(self, "_home_start_btn", None)
+        if start_btn is not None and (w is start_btn or start_btn.isAncestorOf(w)):
+            return super().eventFilter(watched, event)
+        if table.isAncestorOf(w):
+            if isinstance(w, QScrollBar):
+                return super().eventFilter(watched, event)
+            vp = table.viewport()
+            local = vp.mapFromGlobal(pos)
+            if table.indexAt(local).isValid():
+                return super().eventFilter(watched, event)
+            table.clearSelection()
+            self._sync_home_row_selection_styles()
+            return super().eventFilter(watched, event)
+        table.clearSelection()
+        self._sync_home_row_selection_styles()
+        return super().eventFilter(watched, event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
