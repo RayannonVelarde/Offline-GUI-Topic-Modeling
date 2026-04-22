@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -100,9 +99,42 @@ def _agent_dbg(location: str, message: str, data: dict, *, hypothesis_id: str, r
 # Home file table viewport: medium default, grow with real row/widget heights, cap then scroll.
 HOME_TABLE_MIN_H = 260
 HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
-HOME_TABLE_ROW_MIN_H = 52
+HOME_TABLE_ROW_MIN_H = 58
 # Home table: action column (folder + log toolbuttons + padding).
 HOME_TABLE_FOLDER_COL_W = 108
+
+
+class _HomeStatusTrack(QWidget):
+    """Keeps status text in its own band above the bar and paints the label above the bar."""
+
+    def __init__(self, status_label: QLabel, progress: QProgressBar, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._lbl = status_label
+        self._bar = progress
+        self._gap_px = 4
+        self._bar_h = 4
+        status_label.setParent(self)
+        progress.setParent(self)
+        status_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+    def sizeHint(self) -> QSize:
+        lh = max(self._lbl.sizeHint().height(), self.fontMetrics().height())
+        h = lh + self._gap_px + self._bar_h + 2
+        return QSize(0, h)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def resizeEvent(self, event) -> None:
+        w = max(0, self.width())
+        h = max(0, self.height())
+        bh = min(self._bar_h, h)
+        self._bar.setGeometry(0, h - bh, w, bh)
+        top_h = max(0, h - bh - self._gap_px)
+        self._lbl.setGeometry(0, 0, w, top_h)
+        self._lbl.raise_()
+        super().resizeEvent(event)
 
 
 def _format_duration(seconds: float) -> str:
@@ -153,52 +185,149 @@ NAV_DEF: list[tuple[str, str]] = [
     ("settings", "Settings"),
 ]
 
+# Shared with Settings → Job defaults and the per-job Job Options dialog.
+TRANSLATION_MODE_OPTIONS: list[str] = [
+    "Auto → English",
+    "Auto → Spanish",
+    "Auto → French",
+    "Auto → German",
+    "Auto → Portuguese",
+    "Auto → Italian",
+    "None",
+]
+
+TIMESTAMP_MODE_OPTIONS: list[str] = ["No timestamps", "Per segment", "Per word"]
+
 
 class JobOptionsDialog(QDialog):
+    """Per-run options; styled like the rest of the app (chevron menus, not native combos)."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.setObjectName("job-options-dialog")
         self.setWindowTitle("Job Options")
+        self.setModal(True)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setMinimumWidth(380)
 
-        layout = QVBoxLayout(self)
+        theme = getattr(parent, "_theme", THEME_LIGHT) if parent else THEME_LIGHT
+        chev_col = "#94a3b8" if theme == THEME_DARK else "#475569"
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(12)
 
         self.diarization_checkbox = QCheckBox("Enable speaker diarization")
+        self.diarization_checkbox.setObjectName("job-options-checkbox")
         self.diarization_checkbox.setChecked(True)
 
-        spk_row = QHBoxLayout()
         spk_lbl = QLabel("Number of speakers:")
+        spk_lbl.setObjectName("settings-label")
         self.speaker_count_spin = QSpinBox()
+        self.speaker_count_spin.setObjectName("settings-input")
         self.speaker_count_spin.setRange(1, 32)
         self.speaker_count_spin.setValue(2)
-        self.speaker_count_spin.setFixedWidth(72)
-        spk_row.addWidget(spk_lbl)
-        spk_row.addStretch()
-        spk_row.addWidget(self.speaker_count_spin)
+        self.speaker_count_spin.setFixedWidth(220)
+        self.speaker_count_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        )
+
+        spk_row = QWidget()
+        spk_lay = QHBoxLayout(spk_row)
+        spk_lay.setContentsMargins(0, 0, 0, 0)
+        spk_lay.setSpacing(10)
+        spk_lay.addWidget(spk_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        spk_lay.addStretch(1)
+        spk_lay.addWidget(self.speaker_count_spin, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.diarization_checkbox.toggled.connect(self._sync_speaker_spin_enabled)
         self._sync_speaker_spin_enabled()
 
-        self.translation_combo = QComboBox()
-        self.translation_combo.addItems(["None", "Auto → English"])
-
-        self.timestamps_combo = QComboBox()
-        self.timestamps_combo.addItems(
-            ["No timestamps", "Per segment", "Per word"]
+        trans_lbl = QLabel("Translation:")
+        trans_lbl.setObjectName("settings-label")
+        self.translation_field, self.translation_value_label, _ = self._make_chevron_dropdown(
+            TRANSLATION_MODE_OPTIONS, "Auto → English", chev_col
         )
 
-        layout.addWidget(self.diarization_checkbox)
-        layout.addLayout(spk_row)
-        layout.addWidget(QLabel("Translation:"))
-        layout.addWidget(self.translation_combo)
-        layout.addWidget(QLabel("Timestamps:"))
-        layout.addWidget(self.timestamps_combo)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
-            parent=self,
+        ts_lbl = QLabel("Timestamps:")
+        ts_lbl.setObjectName("settings-label")
+        self.timestamps_field, self.timestamps_value_label, _ = self._make_chevron_dropdown(
+            TIMESTAMP_MODE_OPTIONS, "No timestamps", chev_col
         )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+
+        outer.addWidget(self.diarization_checkbox)
+        outer.addWidget(spk_row)
+        outer.addWidget(trans_lbl)
+        outer.addWidget(self.translation_field)
+        outer.addWidget(ts_lbl)
+        outer.addWidget(self.timestamps_field)
+        outer.addSpacing(4)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(10)
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setObjectName("add-btn")
+        cancel_btn.clicked.connect(self.reject)
+        ok_btn = QPushButton("OK")
+        ok_btn.setObjectName("start-btn")
+        ok_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        ok_btn.setDefault(True)
+        ok_btn.setAutoDefault(True)
+        ok_btn.clicked.connect(self.accept)
+        btn_row.addWidget(cancel_btn, 0)
+        btn_row.addWidget(ok_btn, 0)
+        outer.addLayout(btn_row)
+
+    def _make_chevron_dropdown(
+        self, options: list[str], initial: str, chev_color: str
+    ) -> tuple[QFrame, QLabel, QMenu]:
+        initial = initial if initial in options else options[0]
+        field = QFrame()
+        field.setObjectName("job-options-dropdown-field")
+        field.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        field.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        lay = QHBoxLayout(field)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+
+        val = QLabel(initial)
+        val.setObjectName("settings-dropdown-value")
+        val.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        val.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        val.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        chev = QToolButton()
+        chev.setObjectName("settings-chevron-btn")
+        chev.setCursor(Qt.CursorShape.PointingHandCursor)
+        chev.setAutoRaise(True)
+        chev.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        chev.setFixedSize(24, 24)
+        icon_sz = 14
+        chev.setIcon(make_disclosure_chevron_icon(expanded=True, size=icon_sz, color_hex=chev_color))
+        chev.setIconSize(QSize(icon_sz, icon_sz))
+
+        menu = QMenu(self)
+        menu.setObjectName("settings-translation-menu")
+        for opt in options:
+            act = menu.addAction(opt)
+            act.setData(opt)
+
+        def _pick(a) -> None:
+            val.setText(str(a.data()))
+
+        def _open() -> None:
+            pos = field.mapToGlobal(QPoint(0, field.height()))
+            menu.setFixedWidth(field.width())
+            menu.popup(pos)
+
+        menu.triggered.connect(_pick)
+        chev.clicked.connect(_open)
+
+        lay.addWidget(val, 1)
+        lay.addWidget(chev, 0, Qt.AlignmentFlag.AlignRight)
+        return field, val, menu
 
     def _sync_speaker_spin_enabled(self):
         self.speaker_count_spin.setEnabled(self.diarization_checkbox.isChecked())
@@ -662,7 +791,8 @@ class MainWindow(QMainWindow):
         hdr = self.jobs_table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        # Match Home: a stretchy Status column reads better than ResizeToContents (narrow bar + offset text).
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         card_layout.addWidget(self.jobs_table)
@@ -972,7 +1102,7 @@ class MainWindow(QMainWindow):
             form.setHorizontalSpacing(10)
             form.setVerticalSpacing(6)
             form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+            form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
             form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
             parent.setLayout(form)
             return form
@@ -1014,7 +1144,13 @@ class MainWindow(QMainWindow):
         theme = self._settings().value(KEY_THEME, THEME_LIGHT)
         self.dark_mode_checkbox.setChecked(theme == THEME_DARK)
         self.dark_mode_checkbox.toggled.connect(self._on_dark_mode_toggled)
-        appearance_form.addRow(self.dark_mode_checkbox)
+        dark_mode_row = QWidget()
+        dark_mode_lay = QHBoxLayout(dark_mode_row)
+        dark_mode_lay.setContentsMargins(0, 0, 0, 0)
+        dark_mode_lay.setSpacing(0)
+        dark_mode_lay.addWidget(self.dark_mode_checkbox, 0, Qt.AlignmentFlag.AlignLeft)
+        dark_mode_lay.addStretch(1)
+        appearance_form.addRow(_make_label(""), dark_mode_row)
 
         appearance_layout.addWidget(appearance_body)
         layout.addWidget(appearance_card)
@@ -1035,7 +1171,7 @@ class MainWindow(QMainWindow):
         self.default_diarization_checkbox.toggled.connect(self._on_default_diarization_toggled)
         dia_row = QWidget()
         dia_lay = QHBoxLayout(dia_row)
-        dia_lay.setContentsMargins(0, 0, 0, 4)
+        dia_lay.setContentsMargins(0, 0, 0, 0)
         dia_lay.setSpacing(0)
         dia_lay.addWidget(self.default_diarization_checkbox, 0, Qt.AlignmentFlag.AlignLeft)
         dia_lay.addStretch(1)
@@ -1047,7 +1183,10 @@ class MainWindow(QMainWindow):
         self.default_speaker_spin.setValue(
             max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
         )
-        self.default_speaker_spin.setMinimumWidth(_SETTINGS_FIELD_MIN_W)
+        self.default_speaker_spin.setFixedWidth(_SETTINGS_FIELD_MIN_W)
+        self.default_speaker_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+        )
         self.default_speaker_spin.valueChanged.connect(
             lambda v: self._settings().setValue(KEY_DEFAULT_NUM_SPEAKERS, int(v))
         )
@@ -1055,15 +1194,7 @@ class MainWindow(QMainWindow):
         defaults_form.addRow(_make_label("Default number of speakers:"), self.default_speaker_spin)
 
         # Translation mode dropdown (aesthetic): opens ONLY via chevron click.
-        self.default_translation_options = [
-            "Auto → English",
-            "Auto → Spanish",
-            "Auto → French",
-            "Auto → German",
-            "Auto → Portuguese",
-            "Auto → Italian",
-            "None",
-        ]
+        self.default_translation_options = list(TRANSLATION_MODE_OPTIONS)
         current_translation = str(
             self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto → English")
         )
@@ -1106,6 +1237,7 @@ class MainWindow(QMainWindow):
         self.default_translation_chevron_btn.setIconSize(QSize(icon_sz, icon_sz))
 
         self.default_translation_menu = QMenu(self)
+        self.default_translation_menu.setObjectName("settings-translation-menu")
         for opt in self.default_translation_options:
             act = self.default_translation_menu.addAction(opt)
             act.setData(opt)
@@ -1115,10 +1247,9 @@ class MainWindow(QMainWindow):
             self._settings().setValue(KEY_DEFAULT_TRANSLATION, str(text))
 
         def _open_translation_menu() -> None:
-            gp = self.default_translation_chevron_btn.mapToGlobal(
-                QPoint(0, self.default_translation_chevron_btn.height())
-            )
-            self.default_translation_menu.popup(gp)
+            pos = translation_field.mapToGlobal(QPoint(0, translation_field.height()))
+            self.default_translation_menu.setFixedWidth(translation_field.width())
+            self.default_translation_menu.popup(pos)
 
         self.default_translation_menu.triggered.connect(
             lambda a: _set_translation_mode(str(a.data()))
@@ -1147,9 +1278,15 @@ class MainWindow(QMainWindow):
         self.default_timestamps_checkbox.toggled.connect(
             lambda v: self._settings().setValue(KEY_DEFAULT_TIMESTAMPS, bool(v))
         )
-        ts_label = _make_label("Timestamps")
+        ts_label = _make_label("Timestamps:")
         ts_label.setBuddy(self.default_timestamps_checkbox)
-        defaults_form.addRow(ts_label, self.default_timestamps_checkbox)
+        ts_row = QWidget()
+        ts_lay = QHBoxLayout(ts_row)
+        ts_lay.setContentsMargins(0, 0, 0, 0)
+        ts_lay.setSpacing(0)
+        ts_lay.addWidget(self.default_timestamps_checkbox, 0, Qt.AlignmentFlag.AlignLeft)
+        ts_lay.addStretch(1)
+        defaults_form.addRow(ts_label, ts_row)
 
         defaults_layout.addWidget(defaults_body)
         layout.addWidget(defaults_card)
@@ -1193,7 +1330,7 @@ class MainWindow(QMainWindow):
         )
         auto_open_row = QWidget()
         auto_open_lay = QHBoxLayout(auto_open_row)
-        auto_open_lay.setContentsMargins(0, 2, 0, 0)
+        auto_open_lay.setContentsMargins(0, 0, 0, 0)
         auto_open_lay.setSpacing(0)
         auto_open_lay.addWidget(self.auto_open_output_checkbox, 0, Qt.AlignmentFlag.AlignLeft)
         auto_open_lay.addStretch(1)
@@ -1547,6 +1684,10 @@ class MainWindow(QMainWindow):
         bar.style().unpolish(bar)
         bar.style().polish(bar)
         bar.update()
+        track = getattr(col2, "_status_track", None)
+        if track is not None:
+            track.updateGeometry()
+            track.update()
 
     def _build_home_filename_cell(self, fname: str, path_key: str) -> QWidget:
         outer = QWidget()
@@ -1705,20 +1846,23 @@ class MainWindow(QMainWindow):
         sw.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         vl = QVBoxLayout(sw)
         vl.setContentsMargins(6, 4, 6, 4)
-        vl.setSpacing(6)
-        vl.setAlignment(Qt.AlignmentFlag.AlignTop)
+        vl.setSpacing(0)
         st_lbl = QLabel(status)
-        st_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+        st_lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
         bar = QProgressBar()
         bar.setRange(0, 100)
         bar.setValue(0)
         bar.setTextVisible(False)
-        bar.setFixedHeight(5)
-        vl.addWidget(st_lbl)
-        vl.addWidget(bar)
+        bar.setFixedHeight(4)
+        bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        track = _HomeStatusTrack(st_lbl, bar, sw)
+        # Vertical center so fixed-height Jobs rows line up with duration (VCenter) and filename.
+        vl.addStretch(1)
+        vl.addWidget(track, 0)
         vl.addStretch(1)
         sw._status_lbl = st_lbl  # type: ignore[attr-defined]
         sw._progress_bar = bar  # type: ignore[attr-defined]
+        sw._status_track = track  # type: ignore[attr-defined]
         pct = 100 if status == "Complete" else 0
         self._apply_home_status_bar_style(sw, status, pct)
         return sw
@@ -1811,11 +1955,14 @@ class MainWindow(QMainWindow):
             max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
         )
         dialog._sync_speaker_spin_enabled()
-        dialog.translation_combo.setCurrentText(self._settings().value(KEY_DEFAULT_TRANSLATION, "None"))
+        tr = str(self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto → English"))
+        if tr not in TRANSLATION_MODE_OPTIONS:
+            tr = "Auto → English"
+        dialog.translation_value_label.setText(tr)
         if bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool)):
-            dialog.timestamps_combo.setCurrentText("Per segment")
+            dialog.timestamps_value_label.setText("Per segment")
         else:
-            dialog.timestamps_combo.setCurrentText("No timestamps")
+            dialog.timestamps_value_label.setText("No timestamps")
 
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -1827,8 +1974,8 @@ class MainWindow(QMainWindow):
 
         diarize = dialog.diarization_checkbox.isChecked()
         num_speakers = dialog.speaker_count_spin.value()
-        translation = dialog.translation_combo.currentText()
-        timestamps = dialog.timestamps_combo.currentText()
+        translation = dialog.translation_value_label.text()
+        timestamps = dialog.timestamps_value_label.text()
 
         # Require a Hugging Face token for jobs that need it.
         token = self._get_hf_token()

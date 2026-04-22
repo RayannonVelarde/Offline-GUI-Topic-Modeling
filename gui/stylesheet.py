@@ -90,6 +90,33 @@ QMainWindow, QWidget {
     height: 16px;
 }
 
+/* ── Job Options dialog (per-run) ── */
+QDialog#job-options-dialog {
+    background-color: #f3f4f6;
+}
+QCheckBox#job-options-checkbox {
+    color: #334155;
+    spacing: 8px;
+    font-size: 13px;
+    font-weight: 500;
+}
+QCheckBox#job-options-checkbox::indicator {
+    width: 16px;
+    height: 16px;
+}
+QLabel#settings-dropdown-value {
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 500;
+}
+QFrame#job-options-dropdown-field {
+    background-color: transparent;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 7px 10px;
+    min-height: 30px;
+}
+
 /* ── Settings ── */
 #settings-page QWidget {
     background-color: transparent;
@@ -125,6 +152,21 @@ QComboBox#settings-input QAbstractItemView {
     border: 1px solid #d7dee8;
     selection-background-color: #e8f0ff;
     selection-color: #0f172a;
+}
+
+QMenu#settings-translation-menu {
+    background-color: #ffffff;
+    border: 1px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 6px 4px;
+}
+QMenu#settings-translation-menu::item {
+    padding: 8px 12px;
+    border-radius: 6px;
+}
+QMenu#settings-translation-menu::item:selected {
+    background-color: #e8f0ff;
+    color: #0f172a;
 }
 
 QToolButton#settings-chevron-btn {
@@ -569,6 +611,33 @@ QMainWindow, QWidget {
     height: 16px;
 }
 
+/* ── Job Options dialog (per-run) ── */
+QDialog#job-options-dialog {
+    background-color: #0f1117;
+}
+QCheckBox#job-options-checkbox {
+    color: #e2e8f0;
+    spacing: 8px;
+    font-size: 13px;
+    font-weight: 500;
+}
+QCheckBox#job-options-checkbox::indicator {
+    width: 16px;
+    height: 16px;
+}
+QLabel#settings-dropdown-value {
+    color: #e2e8f0;
+    font-size: 13px;
+    font-weight: 500;
+}
+QFrame#job-options-dropdown-field {
+    background-color: transparent;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 7px 10px;
+    min-height: 30px;
+}
+
 /* ── Settings ── */
 #settings-page QWidget {
     background-color: transparent;
@@ -604,6 +673,21 @@ QComboBox#settings-input QAbstractItemView {
     border: 1px solid #1e2433;
     selection-background-color: #1e2d4a;
     selection-color: #e2e8f0;
+}
+
+QMenu#settings-translation-menu {
+    background-color: #0f1117;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 6px 4px;
+}
+QMenu#settings-translation-menu::item {
+    padding: 8px 12px;
+    border-radius: 6px;
+}
+QMenu#settings-translation-menu::item:selected {
+    background-color: #1e2d4a;
+    color: #e2e8f0;
 }
 
 QSpinBox#settings-input {
