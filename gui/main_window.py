@@ -74,6 +74,29 @@ OUTPUT_ENGLISH_BASENAME = "transcription_english.txt"
 # Sidecar next to archived transcripts: <stem>_transcription_meta.json
 TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
 
+# region agent log
+_DEBUG_LOG_PATH = "/Users/lucasmontoya/Desktop/Senior_Project/TheChosenOne/.cursor/debug-45bbf1.log"
+_DEBUG_SESSION_ID = "45bbf1"
+
+
+def _agent_dbg(location: str, message: str, data: dict, *, hypothesis_id: str, run_id: str) -> None:
+    try:
+        payload = {
+            "sessionId": _DEBUG_SESSION_ID,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+# endregion agent log
+
 # Home file table viewport: medium default, grow with real row/widget heights, cap then scroll.
 HOME_TABLE_MIN_H = 260
 HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
@@ -433,12 +456,30 @@ class MainWindow(QMainWindow):
     def _get_output_folder(self) -> str:
         """Return output folder; create a sensible default if unset."""
         saved = self._settings().value(KEY_OUTPUT_FOLDER, "")
+        # region agent log
+        _agent_dbg(
+            "gui/main_window.py:_get_output_folder",
+            "Resolving output folder",
+            {"saved_setting": str(saved) if saved is not None else None, "script_dir": SCRIPT_DIR},
+            hypothesis_id="H1",
+            run_id="pre-fix",
+        )
+        # endregion agent log
         if isinstance(saved, str) and saved.strip():
             path = saved.strip()
         else:
             path = os.path.join(SCRIPT_DIR, "outputs")
             self._settings().setValue(KEY_OUTPUT_FOLDER, path)
         os.makedirs(path, exist_ok=True)
+        # region agent log
+        _agent_dbg(
+            "gui/main_window.py:_get_output_folder",
+            "Output folder resolved/ensured",
+            {"resolved_path": os.path.abspath(path), "exists": os.path.isdir(path)},
+            hypothesis_id="H2",
+            run_id="pre-fix",
+        )
+        # endregion agent log
         return path
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
@@ -2061,6 +2102,21 @@ class MainWindow(QMainWindow):
         """
         out_dir = self._get_output_folder()
         base = os.path.splitext(os.path.basename(full_path.strip()))[0]
+        # region agent log
+        audio_dir = os.path.dirname(os.path.abspath(full_path.strip())) if full_path else ""
+        _agent_dbg(
+            "gui/main_window.py:_archive_latest_outputs_for_job",
+            "Archiving latest outputs",
+            {
+                "full_path": full_path,
+                "audio_dir": audio_dir,
+                "out_dir": os.path.abspath(out_dir) if out_dir else "",
+                "expected_audio_local_output": os.path.join(audio_dir, "output") if audio_dir else "",
+            },
+            hypothesis_id="H3",
+            run_id="pre-fix",
+        )
+        # endregion agent log
 
         src_spanish = os.path.join(SCRIPT_DIR, OUTPUT_SPANISH_BASENAME)
         src_english = os.path.join(SCRIPT_DIR, OUTPUT_ENGLISH_BASENAME)
@@ -2069,6 +2125,22 @@ class MainWindow(QMainWindow):
         dst_english = os.path.join(out_dir, f"{base}_transcription_english.txt")
 
         moved_any = False
+        # region agent log
+        _agent_dbg(
+            "gui/main_window.py:_archive_latest_outputs_for_job",
+            "Source/destination paths",
+            {
+                "src_spanish": src_spanish,
+                "src_english": src_english,
+                "dst_spanish": dst_spanish,
+                "dst_english": dst_english,
+                "src_spanish_exists": os.path.exists(src_spanish),
+                "src_english_exists": os.path.exists(src_english),
+            },
+            hypothesis_id="H4",
+            run_id="pre-fix",
+        )
+        # endregion agent log
         if os.path.exists(src_spanish):
             os.replace(src_spanish, dst_spanish)
             moved_any = True
@@ -2081,7 +2153,22 @@ class MainWindow(QMainWindow):
             dst_english = ""
 
         if moved_any:
-            self._write_transcription_meta(out_dir, full_path, base, dst_spanish, dst_english)
+            # Do not write sidecar metadata files; keep outputs to .txt only.
+            pass
+        # region agent log
+        _agent_dbg(
+            "gui/main_window.py:_archive_latest_outputs_for_job",
+            "Archive result",
+            {
+                "moved_any": moved_any,
+                "final_spanish": dst_spanish,
+                "final_english": dst_english,
+                "out_dir_exists": os.path.isdir(out_dir),
+            },
+            hypothesis_id="H5",
+            run_id="pre-fix",
+        )
+        # endregion agent log
 
         return {
             "folder": out_dir,
