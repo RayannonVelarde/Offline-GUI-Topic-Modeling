@@ -60,6 +60,11 @@ _SVG_PARTS: dict[str, str] = {
 <line x1="8" y1="17" x2="16" y2="17"/>
 <line x1="8" y1="9" x2="11" y2="9"/>
 """,
+    # Minimal X (Lucide-style). Used for the Home row "Remove from list" button.
+    "x_close": """
+<line x1="18" y1="6" x2="6" y2="18"/>
+<line x1="6" y1="6" x2="18" y2="18"/>
+""",
 }
 
 
@@ -110,3 +115,8 @@ def make_disclosure_chevron_icon(*, expanded: bool, size: int = 14, color_hex: s
 def make_log_output_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
     """Document-with-lines icon for inline job log show/hide (Home filename row)."""
     return _render_stroke_icon("log_output", size=size, color_hex=color_hex)
+
+
+def make_remove_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Minimal X icon for the Home row 'Remove from list' action."""
+    return _render_stroke_icon("x_close", size=size, color_hex=color_hex)

@@ -392,6 +392,15 @@ QHeaderView::section {
     background-color: rgba(15, 23, 42, 0.06);
     border-radius: 4px;
 }
+#home-file-table QToolButton#home-row-remove-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#home-file-table QToolButton#home-row-remove-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
 
 #jobs-table QToolButton#jobs-row-open-btn {
     background: transparent;
@@ -889,6 +898,15 @@ QHeaderView::section {
     padding: 0px;
 }
 #home-file-table QToolButton#home-row-log-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+}
+#home-file-table QToolButton#home-row-remove-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#home-file-table QToolButton#home-row-remove-btn:hover {
     background-color: rgba(255, 255, 255, 0.07);
     border-radius: 4px;
 }

@@ -3,8 +3,9 @@ import os
 import time
 import keyring
 from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer, QEvent
-from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent
+from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent, QTextOption
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QProgressBar,
     QSizePolicy,
     QPushButton,
@@ -43,6 +45,7 @@ from nav_icons import (
     make_folder_open_icon,
     make_log_output_icon,
     make_nav_icon,
+    make_remove_icon,
 )
 
 try:
@@ -51,9 +54,9 @@ except Exception:  # QtMultimedia may be unavailable in some PySide6 builds
     QAudioOutput = None  # type: ignore[assignment]
     QMediaPlayer = None  # type: ignore[assignment]
 
-# Path to mixbothtask.py (same directory as this file)
+# Path to studio_engine.py (project root, one level above this file).
 SCRIPT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-MIXBOTHTASK_PATH = os.path.join(SCRIPT_DIR, "mixbothtask.py")
+STUDIO_ENGINE_PATH = os.path.join(SCRIPT_DIR, "studio_engine.py")
 
 SETTINGS_ORG = "OfflineGUI"
 SETTINGS_APP = "TopicModelingTranscription"
@@ -66,13 +69,28 @@ KEY_OUTPUT_FOLDER = "jobs/output_folder"
 KEY_DEFAULT_DIARIZATION = "jobs/default_diarization"
 KEY_DEFAULT_NUM_SPEAKERS = "jobs/default_num_speakers"
 KEY_DEFAULT_TIMESTAMPS = "jobs/default_timestamps"
+# Legacy name kept for the persisted source-language default; the setting
+# now answers "what language is the audio?" (Auto / English / Spanish).
+# Paired with KEY_DEFAULT_OUTPUT_MODE for the translation on/off choice.
 KEY_DEFAULT_TRANSLATION = "jobs/default_translation"
+KEY_DEFAULT_OUTPUT_MODE = "jobs/default_output_mode"
 KEY_AUTO_OPEN_OUTPUT = "jobs/auto_open_output_folder"
+# Phase 2 advanced-settings defaults. Persisted so "last used" sticks
+# between runs of the Job Options dialog.
+KEY_DEFAULT_MODEL = "jobs/default_model"
+KEY_DEFAULT_INITIAL_PROMPT = "jobs/default_initial_prompt"
+KEY_DEFAULT_PREPROCESS = "jobs/default_preprocess"
+KEY_DEFAULT_SPLIT_ON_SPEAKER = "jobs/default_split_on_speaker_change"
 
-OUTPUT_SPANISH_BASENAME = "transcription_spanish.txt"
-OUTPUT_ENGLISH_BASENAME = "transcription_english.txt"
-# Sidecar next to archived transcripts: <stem>_transcription_meta.json
-TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
+ENGINE_TRANSCRIPT_PREFIX = "transcription_"
+ENGINE_TRANSLATION_PREFIX = "translation_"
+# Sidecar next to archived transcripts: <stem>_job_meta.json. Named with a
+# suffix that can't be matched by the `_transcription_` / `_translation_`
+# markers used by _refresh_review_items so it's never mis-grouped.
+TRANSCRIPTION_META_SUFFIX = "_job_meta.json"
+# Legacy sidecar name; still read so older runs' audio-path / display-name
+# metadata keeps loading. New writes go to TRANSCRIPTION_META_SUFFIX.
+LEGACY_TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
 
 # region agent log
 _DEBUG_LOG_PATH = "/Users/lucasmontoya/Desktop/Senior_Project/TheChosenOne/.cursor/debug-45bbf1.log"
@@ -101,8 +119,9 @@ def _agent_dbg(location: str, message: str, data: dict, *, hypothesis_id: str, r
 HOME_TABLE_MIN_H = 260
 HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
 HOME_TABLE_ROW_MIN_H = 58
-# Home table: action column (folder + log toolbuttons + padding).
-HOME_TABLE_FOLDER_COL_W = 108
+# Home table: action column (folder + log + remove toolbuttons + padding).
+# Three 22px buttons plus 6px spacing plus 4/8px side margins.
+HOME_TABLE_FOLDER_COL_W = 136
 
 
 class _HomeStatusTrack(QWidget):
@@ -186,18 +205,96 @@ NAV_DEF: list[tuple[str, str]] = [
     ("settings", "Settings"),
 ]
 
-# Shared with Settings → Job defaults and the per-job Job Options dialog.
-TRANSLATION_MODE_OPTIONS: list[str] = [
-    "Auto → English",
-    "Auto → Spanish",
-    "Auto → French",
-    "Auto → German",
-    "Auto → Portuguese",
-    "Auto → Italian",
-    "None",
-]
+# Source-language picker: "what language is the audio in?". Paired with
+# OUTPUT_MODE_OPTIONS below, which separately controls whether a
+# translated file is written. The engine pairs es<->en automatically;
+# "Auto" lets Whisper detect.
+SOURCE_LANGUAGE_OPTIONS: list[str] = ["Auto", "English", "Spanish"]
+SOURCE_LANGUAGE_TO_ISO: dict[str, str] = {
+    "Auto": "auto",
+    "English": "en",
+    "Spanish": "es",
+}
+
+# Output mode: transcript only, or transcript + translation. Maps to the
+# engine's --translate flag. "Original + translation" uses --translate
+# auto so the engine picks the right MT engine for the resolved pair.
+OUTPUT_MODE_OPTIONS: list[str] = ["Original only", "Original + translation"]
+OUTPUT_MODE_TO_TRANSLATE_FLAG: dict[str, str] = {
+    "Original only": "none",
+    "Original + translation": "auto",
+}
+OUTPUT_MODE_DEFAULT = "Original + translation"
+
+# Legacy aliases kept so any external import keeps resolving. New code
+# should use SOURCE_LANGUAGE_OPTIONS / OUTPUT_MODE_OPTIONS.
+AUDIO_LANGUAGE_OPTIONS: list[str] = SOURCE_LANGUAGE_OPTIONS
+AUDIO_LANGUAGE_TO_ISO: dict[str, str] = SOURCE_LANGUAGE_TO_ISO
+TRANSLATION_MODE_OPTIONS: list[str] = SOURCE_LANGUAGE_OPTIONS
 
 TIMESTAMP_MODE_OPTIONS: list[str] = ["No timestamps", "Per segment", "Per word"]
+
+# Phase 2 advanced settings. Options match studio_engine.py's CLI choices.
+# MODEL_DEFAULT stays "small" to preserve the legacy latency/VRAM profile;
+# users can bump to large-v3 via the Advanced block for higher quality.
+MODEL_OPTIONS: list[str] = [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v2",
+    "large-v3",
+    "large-v3-turbo",
+]
+MODEL_DEFAULT = "small"
+
+# "None" / "Normalize loudness" map to studio_engine's --preprocess flag
+# values ("none" / "normalize"). The human labels are what the dropdown
+# displays; PREPROCESS_LABEL_TO_FLAG resolves them back to the CLI value.
+PREPROCESS_OPTIONS: list[str] = ["None", "Normalize loudness"]
+PREPROCESS_LABEL_TO_FLAG: dict[str, str] = {
+    "None": "none",
+    "Normalize loudness": "normalize",
+}
+PREPROCESS_DEFAULT = "None"
+
+# Human-readable labels for the engine's `[event] {"event":"stage", ...}`
+# stream. Names match the call sites in studio_engine.py (`_emit_event`).
+STAGE_LABELS: dict[str, str] = {
+    "preprocess": "Preprocessing audio",
+    "load_audio": "Loading audio",
+    "load_asr": "Loading speech model",
+    "transcribe": "Transcribing",
+    "transcribe_whisper_translate": "Translating (Whisper)",
+    "align": "Aligning words",
+    "diarize": "Identifying speakers",
+    "assign_speakers": "Assigning speakers",
+    "split_on_speaker_change": "Splitting on speaker change",
+    "translate_mt": "Translating",
+    "write": "Writing output",
+}
+
+# Ordered (stage_name, pct) snapshots from studio_engine.py. Used to compute
+# the next-stage cap so the tween glides toward the next real milestone
+# instead of racing to a global 94% ceiling.
+STAGE_ORDER: list[tuple[str, float]] = [
+    ("preprocess", 0.02),
+    ("load_audio", 0.05),
+    ("load_asr", 0.10),
+    ("transcribe", 0.20),
+    ("transcribe_whisper_translate", 0.35),
+    ("align", 0.45),
+    ("diarize", 0.60),
+    ("assign_speakers", 0.70),
+    ("split_on_speaker_change", 0.78),
+    ("translate_mt", 0.85),
+    ("write", 0.95),
+]
+
+# Default copy for the inline warning banner on the Home page. The banner is
+# reused for duplicate-file notices, so the default is stored here and
+# reapplied whenever the banner is shown without an explicit override.
+HOME_WARNING_DEFAULT_TEXT = "Select a file from the table to start a job."
 
 
 class JobOptionsDialog(QDialog):
@@ -244,10 +341,22 @@ class JobOptionsDialog(QDialog):
         self.diarization_checkbox.toggled.connect(self._sync_speaker_spin_enabled)
         self._sync_speaker_spin_enabled()
 
-        trans_lbl = QLabel("Translation:")
-        trans_lbl.setObjectName("settings-label")
-        self.translation_field, self.translation_value_label, _ = self._make_chevron_dropdown(
-            TRANSLATION_MODE_OPTIONS, "Auto → English", chev_col
+        src_lang_lbl = QLabel("Source language:")
+        src_lang_lbl.setObjectName("settings-label")
+        (
+            self.source_language_field,
+            self.source_language_value_label,
+            _,
+        ) = self._make_chevron_dropdown(SOURCE_LANGUAGE_OPTIONS, "Auto", chev_col)
+
+        output_mode_lbl = QLabel("Output mode:")
+        output_mode_lbl.setObjectName("settings-label")
+        (
+            self.output_mode_field,
+            self.output_mode_value_label,
+            _,
+        ) = self._make_chevron_dropdown(
+            OUTPUT_MODE_OPTIONS, OUTPUT_MODE_DEFAULT, chev_col
         )
 
         ts_lbl = QLabel("Timestamps:")
@@ -256,13 +365,113 @@ class JobOptionsDialog(QDialog):
             TIMESTAMP_MODE_OPTIONS, "No timestamps", chev_col
         )
 
+        # Advanced settings section. Collapsed by default so the dialog
+        # stays compact for the common case; users who care about the
+        # Phase 2 levers (model size, vocab prompt, loudness preprocess,
+        # speaker-change splitting) expand it explicitly.
+        self._advanced_chev_color = chev_col
+        self.advanced_toggle_btn = QToolButton()
+        self.advanced_toggle_btn.setObjectName("job-options-advanced-toggle")
+        self.advanced_toggle_btn.setText("Advanced settings")
+        self.advanced_toggle_btn.setCheckable(True)
+        self.advanced_toggle_btn.setChecked(False)
+        self.advanced_toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.advanced_toggle_btn.setAutoRaise(True)
+        self.advanced_toggle_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.advanced_toggle_btn.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.advanced_toggle_btn.setIconSize(QSize(14, 14))
+        self.advanced_toggle_btn.setIcon(
+            make_disclosure_chevron_icon(
+                expanded=False, size=14, color_hex=chev_col
+            )
+        )
+        self.advanced_toggle_btn.toggled.connect(self._on_advanced_toggled)
+
+        self.advanced_container = QFrame()
+        self.advanced_container.setObjectName("job-options-advanced-container")
+        self.advanced_container.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True
+        )
+        adv_lay = QVBoxLayout(self.advanced_container)
+        adv_lay.setContentsMargins(0, 0, 0, 0)
+        adv_lay.setSpacing(10)
+
+        model_lbl = QLabel("Model:")
+        model_lbl.setObjectName("settings-label")
+        (
+            self.model_field,
+            self.model_value_label,
+            _,
+        ) = self._make_chevron_dropdown(MODEL_OPTIONS, MODEL_DEFAULT, chev_col)
+
+        prompt_lbl = QLabel("Initial prompt (names, jargon, acronyms):")
+        prompt_lbl.setObjectName("settings-label")
+        self.initial_prompt_edit = QPlainTextEdit()
+        self.initial_prompt_edit.setObjectName("settings-input")
+        # Short placeholder: the `#settings-input` stylesheet adds 7px
+        # padding top+bottom, so anything longer than a single wrapped
+        # line gets clipped at the default widget height. The label
+        # above already explains what the field is for.
+        self.initial_prompt_edit.setPlaceholderText(
+            "Optional domain vocabulary"
+        )
+        # Word-wrap so pasted vocab lists don't run off the right edge,
+        # and use a minimum (not fixed) height so longer content grows
+        # the widget within the dialog instead of getting cut off.
+        self.initial_prompt_edit.setLineWrapMode(
+            QPlainTextEdit.LineWrapMode.WidgetWidth
+        )
+        self.initial_prompt_edit.setWordWrapMode(
+            QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere
+        )
+        self.initial_prompt_edit.setMinimumHeight(88)
+
+        preprocess_lbl = QLabel("Audio preprocessing:")
+        preprocess_lbl.setObjectName("settings-label")
+        (
+            self.preprocess_field,
+            self.preprocess_value_label,
+            _,
+        ) = self._make_chevron_dropdown(
+            PREPROCESS_OPTIONS, PREPROCESS_DEFAULT, chev_col
+        )
+
+        self.split_on_speaker_checkbox = QCheckBox(
+            "Split lines when speaker changes mid-segment"
+        )
+        self.split_on_speaker_checkbox.setObjectName("job-options-checkbox")
+        self.split_on_speaker_checkbox.setChecked(False)
+
+        adv_lay.addWidget(model_lbl)
+        adv_lay.addWidget(self.model_field)
+        adv_lay.addWidget(prompt_lbl)
+        adv_lay.addWidget(self.initial_prompt_edit)
+        adv_lay.addWidget(preprocess_lbl)
+        adv_lay.addWidget(self.preprocess_field)
+        adv_lay.addWidget(self.split_on_speaker_checkbox)
+
+        self.advanced_container.setVisible(False)
+
         outer.addWidget(self.diarization_checkbox)
         outer.addWidget(spk_row)
-        outer.addWidget(trans_lbl)
-        outer.addWidget(self.translation_field)
+        outer.addWidget(src_lang_lbl)
+        outer.addWidget(self.source_language_field)
+        outer.addWidget(output_mode_lbl)
+        outer.addWidget(self.output_mode_field)
         outer.addWidget(ts_lbl)
         outer.addWidget(self.timestamps_field)
         outer.addSpacing(4)
+        outer.addWidget(self.advanced_toggle_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        outer.addWidget(self.advanced_container)
+
+        # Back-compat aliases: earlier revisions of this file referenced
+        # `translation_field` / `translation_value_label` as the single
+        # translation control. Any leftover external code (tests, demos)
+        # now sees the source-language picker.
+        self.translation_field = self.source_language_field
+        self.translation_value_label = self.source_language_value_label
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
@@ -332,6 +541,22 @@ class JobOptionsDialog(QDialog):
 
     def _sync_speaker_spin_enabled(self):
         self.speaker_count_spin.setEnabled(self.diarization_checkbox.isChecked())
+
+    def _on_advanced_toggled(self, checked: bool) -> None:
+        """Show/hide the Advanced settings block and flip the chevron icon.
+
+        The dialog resizes itself to fit the new content so the section
+        genuinely collapses out of sight instead of leaving dead space.
+        """
+        self.advanced_container.setVisible(bool(checked))
+        self.advanced_toggle_btn.setIcon(
+            make_disclosure_chevron_icon(
+                expanded=bool(checked),
+                size=14,
+                color_hex=self._advanced_chev_color,
+            )
+        )
+        self.adjustSize()
 
 
 class ReviewComparisonPage(QFrame):
@@ -472,10 +697,20 @@ class MainWindow(QMainWindow):
         self._theme = THEME_LIGHT
         self._jobs: list[dict] = []
         self._review_items: list[dict] = []
+        # Output folders we have already attempted legacy-filename migration
+        # on this session. Keyed by canonicalized absolute path.
+        self._migrated_output_dirs: set[str] = set()
         self._current_job_row: int | None = None
         self._current_fname: str | None = None
         self._estimated_progress_pct: float = 0.0
         self._estimated_progress_row: int | None = None
+        self._estimated_progress_target: float = 94.0
+        self._estimated_status: str = "Processing"
+        # Last `done` payload from studio_engine.py (carries resolved
+        # src_lang/tgt_lang and exact transcript_file/translation_file
+        # paths). Read by _archive_latest_outputs_for_job, then cleared at
+        # the start of the next job by _reset_home_row_for_new_job.
+        self._last_done_event: dict | None = None
         self._progress_timer = QTimer(self)
         self._progress_timer.setInterval(110)
         self._progress_timer.timeout.connect(self._on_estimated_progress_tick)
@@ -555,18 +790,27 @@ class MainWindow(QMainWindow):
         self._refresh_home_folder_row_icons()
         self._refresh_jobs_folder_row_icons()
         self._refresh_home_log_disclosure_icons()
+        self._refresh_home_remove_row_icons()
         self._refresh_settings_disclosure_icons()
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
     def _refresh_settings_disclosure_icons(self) -> None:
         """Update Settings chevron icons when theme changes."""
-        btn = getattr(self, "default_translation_chevron_btn", None)
-        if btn is None:
-            return
         col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
         icon_sz = 14
-        btn.setIcon(make_disclosure_chevron_icon(expanded=True, size=icon_sz, color_hex=col))
-        btn.setIconSize(QSize(icon_sz, icon_sz))
+        for attr in (
+            "default_source_language_chevron_btn",
+            "default_output_mode_chevron_btn",
+        ):
+            btn = getattr(self, attr, None)
+            if btn is None:
+                continue
+            btn.setIcon(
+                make_disclosure_chevron_icon(
+                    expanded=True, size=icon_sz, color_hex=col
+                )
+            )
+            btn.setIconSize(QSize(icon_sz, icon_sz))
 
     def _refresh_nav_icons(self):
         if not self._nav_buttons:
@@ -627,8 +871,31 @@ class MainWindow(QMainWindow):
                     btn.setIconSize(QSize(icon_sz, icon_sz))
                     break
 
+    def _refresh_home_remove_row_icons(self) -> None:
+        """Update Home action-column remove-from-list icons on theme change."""
+        if not hasattr(self, "table"):
+            return
+        col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        for r in range(self.table.rowCount()):
+            w = self.table.cellWidget(r, 3)
+            if w is None:
+                continue
+            for btn in w.findChildren(QToolButton):
+                if btn.objectName() == "home-row-remove-btn":
+                    btn.setIcon(make_remove_icon(size=icon_sz, color_hex=col))
+                    btn.setIconSize(QSize(icon_sz, icon_sz))
+                    break
+
     def _get_output_folder(self) -> str:
-        """Return output folder; create a sensible default if unset."""
+        """Return output folder; create a sensible default if unset.
+
+        Does NOT persist the fallback default into QSettings — that made
+        "never configured" and "explicitly cleared" indistinguishable and
+        left a stale absolute path behind when the project was moved. The
+        setting stays blank until the user explicitly chooses a folder in
+        Settings; the computed fallback is returned in-memory only.
+        """
         saved = self._settings().value(KEY_OUTPUT_FOLDER, "")
         # region agent log
         _agent_dbg(
@@ -643,7 +910,6 @@ class MainWindow(QMainWindow):
             path = saved.strip()
         else:
             path = os.path.join(SCRIPT_DIR, "outputs")
-            self._settings().setValue(KEY_OUTPUT_FOLDER, path)
         os.makedirs(path, exist_ok=True)
         # region agent log
         _agent_dbg(
@@ -775,8 +1041,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addSpacing(12)
 
-        # Inline warning banner shown when Start Job is clicked without a selection.
-        self._home_warning = QLabel("Select a file from the table to start a job.")
+        # Inline warning banner. Used for both the "no selection" hint and
+        # duplicate-file notices; text is swapped per call via _show_home_warning.
+        self._home_warning = QLabel(HOME_WARNING_DEFAULT_TEXT)
         self._home_warning.setObjectName("home-warning")
         self._home_warning.setWordWrap(True)
         self._home_warning.hide()
@@ -1172,8 +1439,19 @@ class MainWindow(QMainWindow):
                 s.setValue(KEY_DEFAULT_NUM_SPEAKERS, int(self.default_speaker_spin.value()))
             if hasattr(self, "default_timestamps_checkbox"):
                 s.setValue(KEY_DEFAULT_TIMESTAMPS, bool(self.default_timestamps_checkbox.isChecked()))
-            if hasattr(self, "default_translation_combo"):
-                s.setValue(KEY_DEFAULT_TRANSLATION, str(self.default_translation_combo.currentText()))
+            # The chevron menus already persist on pick, so these Save-time
+            # writes are belt-and-suspenders: they keep the latest shown
+            # value authoritative even if a menu callback failed to fire.
+            if hasattr(self, "default_source_language_value"):
+                s.setValue(
+                    KEY_DEFAULT_TRANSLATION,
+                    str(self.default_source_language_value.text()),
+                )
+            if hasattr(self, "default_output_mode_value"):
+                s.setValue(
+                    KEY_DEFAULT_OUTPUT_MODE,
+                    str(self.default_output_mode_value.text()),
+                )
             if hasattr(self, "output_folder_edit"):
                 s.setValue(KEY_OUTPUT_FOLDER, str(self.output_folder_edit.text()).strip())
             if hasattr(self, "auto_open_output_checkbox"):
@@ -1238,75 +1516,128 @@ class MainWindow(QMainWindow):
         self.default_speaker_spin.setEnabled(self.default_diarization_checkbox.isChecked())
         defaults_form.addRow(_make_label("Default number of speakers:"), self.default_speaker_spin)
 
-        # Translation mode dropdown (aesthetic): opens ONLY via chevron click.
-        self.default_translation_options = list(TRANSLATION_MODE_OPTIONS)
-        current_translation = str(
-            self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto → English")
-        )
-        if current_translation not in self.default_translation_options:
-            current_translation = "Auto → English"
-
-        translation_field = QFrame()
-        translation_field.setObjectName("settings-input")
-        translation_field.setFixedWidth(_SETTINGS_FIELD_MIN_W)
-        translation_field.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-
-        translation_lay = QHBoxLayout(translation_field)
-        translation_lay.setContentsMargins(0, 0, 0, 0)
-        translation_lay.setSpacing(8)
-
-        self.default_translation_value = QLabel(current_translation)
-        self.default_translation_value.setObjectName("settings-dropdown-value")
-        self.default_translation_value.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
-        )
-        self.default_translation_value.setTextInteractionFlags(
-            Qt.TextInteractionFlag.NoTextInteraction
-        )
-        self.default_translation_value.setAlignment(
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
-        )
-
-        self.default_translation_chevron_btn = QToolButton()
-        self.default_translation_chevron_btn.setObjectName("settings-chevron-btn")
-        self.default_translation_chevron_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.default_translation_chevron_btn.setAutoRaise(True)
-        self.default_translation_chevron_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.default_translation_chevron_btn.setFixedSize(24, 24)
-
+        # Source language + Output mode are two independent concerns:
+        #   * Source language answers "what language is the audio?" and maps
+        #     to studio_engine.py's --language flag (auto/en/es).
+        #   * Output mode answers "do we also write a translated file?" and
+        #     maps to --translate (none vs auto). The engine auto-pairs
+        #     es<->en when translation is on.
+        #
+        # Both dropdowns share the same chevron styling; the tiny helper
+        # below keeps their construction in one place so layout stays
+        # consistent and the diff stays small.
         col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
         icon_sz = 14
-        self.default_translation_chevron_btn.setIcon(
-            make_disclosure_chevron_icon(expanded=True, size=icon_sz, color_hex=col)
+
+        def _make_settings_chevron_dropdown(
+            options: list[str],
+            current: str,
+            menu_object_name: str,
+            on_pick,
+        ) -> tuple[QFrame, QLabel, QToolButton, QMenu]:
+            field = QFrame()
+            field.setObjectName("settings-input")
+            field.setFixedWidth(_SETTINGS_FIELD_MIN_W)
+            field.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
+            )
+            lay = QHBoxLayout(field)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(8)
+
+            value_lbl = QLabel(current)
+            value_lbl.setObjectName("settings-dropdown-value")
+            value_lbl.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            value_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            value_lbl.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+            )
+
+            chevron = QToolButton()
+            chevron.setObjectName("settings-chevron-btn")
+            chevron.setCursor(Qt.CursorShape.PointingHandCursor)
+            chevron.setAutoRaise(True)
+            chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            chevron.setFixedSize(24, 24)
+            chevron.setIcon(
+                make_disclosure_chevron_icon(
+                    expanded=True, size=icon_sz, color_hex=col
+                )
+            )
+            chevron.setIconSize(QSize(icon_sz, icon_sz))
+
+            menu = QMenu(self)
+            menu.setObjectName(menu_object_name)
+            for opt in options:
+                act = menu.addAction(opt)
+                act.setData(opt)
+
+            def _popup() -> None:
+                pos = field.mapToGlobal(QPoint(0, field.height()))
+                menu.setFixedWidth(field.width())
+                menu.popup(pos)
+
+            menu.triggered.connect(
+                lambda a, _lbl=value_lbl, _cb=on_pick: (
+                    _lbl.setText(str(a.data())),
+                    _cb(str(a.data())),
+                )
+            )
+            chevron.clicked.connect(_popup)
+
+            lay.addWidget(value_lbl, 1)
+            lay.addWidget(chevron, 0, Qt.AlignmentFlag.AlignRight)
+            return field, value_lbl, chevron, menu
+
+        # Source language dropdown.
+        self.default_source_language_options = list(SOURCE_LANGUAGE_OPTIONS)
+        current_source_language = str(
+            self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto")
         )
-        self.default_translation_chevron_btn.setIconSize(QSize(icon_sz, icon_sz))
+        if current_source_language not in self.default_source_language_options:
+            current_source_language = "Auto"
 
-        self.default_translation_menu = QMenu(self)
-        self.default_translation_menu.setObjectName("settings-translation-menu")
-        for opt in self.default_translation_options:
-            act = self.default_translation_menu.addAction(opt)
-            act.setData(opt)
-
-        def _set_translation_mode(text: str) -> None:
-            self.default_translation_value.setText(text)
-            self._settings().setValue(KEY_DEFAULT_TRANSLATION, str(text))
-
-        def _open_translation_menu() -> None:
-            pos = translation_field.mapToGlobal(QPoint(0, translation_field.height()))
-            self.default_translation_menu.setFixedWidth(translation_field.width())
-            self.default_translation_menu.popup(pos)
-
-        self.default_translation_menu.triggered.connect(
-            lambda a: _set_translation_mode(str(a.data()))
+        (
+            source_language_field,
+            self.default_source_language_value,
+            self.default_source_language_chevron_btn,
+            self.default_source_language_menu,
+        ) = _make_settings_chevron_dropdown(
+            self.default_source_language_options,
+            current_source_language,
+            "settings-translation-menu",
+            lambda text: self._settings().setValue(KEY_DEFAULT_TRANSLATION, str(text)),
         )
-        self.default_translation_chevron_btn.clicked.connect(_open_translation_menu)
+        defaults_form.addRow(_make_label("Source language:"), source_language_field)
 
-        translation_lay.addWidget(self.default_translation_value, 1)
-        translation_lay.addWidget(
-            self.default_translation_chevron_btn, 0, Qt.AlignmentFlag.AlignRight
+        # Back-compat aliases: earlier code referenced `default_translation_*`.
+        self.default_translation_options = self.default_source_language_options
+        self.default_translation_value = self.default_source_language_value
+        self.default_translation_chevron_btn = self.default_source_language_chevron_btn
+        self.default_translation_menu = self.default_source_language_menu
+
+        # Output mode dropdown.
+        self.default_output_mode_options = list(OUTPUT_MODE_OPTIONS)
+        current_output_mode = str(
+            self._settings().value(KEY_DEFAULT_OUTPUT_MODE, OUTPUT_MODE_DEFAULT)
         )
+        if current_output_mode not in self.default_output_mode_options:
+            current_output_mode = OUTPUT_MODE_DEFAULT
 
-        defaults_form.addRow(_make_label("Translation mode:"), translation_field)
+        (
+            output_mode_field,
+            self.default_output_mode_value,
+            self.default_output_mode_chevron_btn,
+            self.default_output_mode_menu,
+        ) = _make_settings_chevron_dropdown(
+            self.default_output_mode_options,
+            current_output_mode,
+            "settings-output-mode-menu",
+            lambda text: self._settings().setValue(KEY_DEFAULT_OUTPUT_MODE, str(text)),
+        )
+        defaults_form.addRow(_make_label("Output mode:"), output_mode_field)
 
         # Label in the form column + bare checkbox avoids long caption clipping in QCheckBox.
         self.default_timestamps_checkbox = QCheckBox()
@@ -1565,6 +1896,19 @@ class MainWindow(QMainWindow):
             return ""
         return getattr(w, "_path_key", "") or ""
 
+    def _find_table_row_for_path(self, full_path: str) -> int:
+        """Return the Home-table row index whose stored path matches `full_path`,
+        or -1 if no row is a match. Comparison uses the same canonical form
+        (`abspath` + `normpath` + `normcase`) as `_remove_existing_job_records_for_file`.
+        """
+        tgt = self._canonical_file_path(full_path)
+        if not tgt:
+            return -1
+        for r in range(self.table.rowCount()):
+            if self._canonical_file_path(self._path_for_row(r)) == tgt:
+                return r
+        return -1
+
     def _filename_for_row(self, row: int) -> str:
         w = self.table.cellWidget(row, 1)
         if w is None:
@@ -1622,6 +1966,7 @@ class MainWindow(QMainWindow):
     def _reset_home_row_for_new_job(self, row: int) -> None:
         """Clear stale Complete/Error UI and log before launching a new run for this row."""
         self._stop_estimated_progress()
+        self._last_done_event = None
         w = self.table.cellWidget(row, 1)
         if w is not None:
             edit = getattr(w, "_log_edit", None)
@@ -1694,6 +2039,55 @@ class MainWindow(QMainWindow):
             "No output folder is available yet.\n\n"
             "Complete a job or choose an output folder in Settings.",
         )
+
+    def _remove_home_row_by_path_key(self, path_key: str) -> None:
+        """Remove a single row from the Home queue. Does NOT touch the audio
+        file on disk. Silently refuses if the row is the actively-running job,
+        surfacing a banner instead — cancel/stop is a separate, future action.
+        """
+        if not hasattr(self, "table"):
+            return
+        tgt = self._canonical_file_path(path_key)
+        if not tgt:
+            return
+        target_row = -1
+        for r in range(self.table.rowCount()):
+            if self._canonical_file_path(self._path_for_row(r)) == tgt:
+                target_row = r
+                break
+        if target_row < 0:
+            return
+
+        if (
+            self._job_process is not None
+            and self._current_job_row is not None
+            and self._current_job_row == target_row
+        ):
+            self._show_home_warning(
+                True, text="Can't remove this file while its job is running."
+            )
+            return
+
+        self.table.removeRow(target_row)
+
+        # Removing a row above the active job shifts the active row index
+        # down by one; keep _current_job_row / _estimated_progress_row
+        # pointing at the same physical row so progress updates don't drift.
+        if (
+            self._current_job_row is not None
+            and target_row < self._current_job_row
+        ):
+            self._current_job_row -= 1
+        if (
+            self._estimated_progress_row is not None
+            and target_row < self._estimated_progress_row
+        ):
+            self._estimated_progress_row -= 1
+
+        self._show_home_warning(False)
+        self._sync_home_table_height()
+        QTimer.singleShot(0, self._sync_home_table_height)
+        QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
     def _sync_home_row_selection_styles(self) -> None:
         """Subtle tint on filename/status cell widgets so selection reads clearly."""
@@ -1878,8 +2272,23 @@ class MainWindow(QMainWindow):
         filename_cell._expand_btn = log_btn  # type: ignore[attr-defined]
         log_btn.toggled.connect(lambda on, o=filename_cell: self._toggle_log_visibility(o, on))
 
+        remove_btn = QToolButton()
+        remove_btn.setObjectName("home-row-remove-btn")
+        remove_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        remove_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        remove_btn.setIcon(make_remove_icon(size=14, color_hex=_muted))
+        remove_btn.setIconSize(QSize(14, 14))
+        remove_btn.setFixedSize(22, 22)
+        remove_btn.setToolTip("Remove from list")
+        remove_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        remove_btn.setAutoRaise(True)
+        remove_btn.clicked.connect(
+            lambda _=False, p=pk: self._remove_home_row_by_path_key(p)
+        )
+
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignTop)
         lay.addWidget(log_btn, 0, Qt.AlignmentFlag.AlignTop)
+        lay.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignTop)
         return wrap
 
     def _build_home_status_cell(self, status: str) -> QWidget:
@@ -1961,10 +2370,28 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
 
     def add_files_to_table(self, files: list[str]):
+        added = 0
+        duplicate_row = -1
+        seen_in_batch: set[str] = set()
         for path in files:
+            canon = self._canonical_file_path(path)
+            if not canon or canon in seen_in_batch:
+                continue
+            seen_in_batch.add(canon)
+
+            existing = self._find_table_row_for_path(path)
+            if existing >= 0:
+                if duplicate_row < 0:
+                    duplicate_row = existing
+                continue
+
             duration = _get_audio_duration(path)
             self._append_table_row(os.path.basename(path), duration, "Pending", full_path=path)
             self._append_log(f"[+] Added file: {os.path.basename(path)}", target_path=path)
+            added += 1
+
+        if duplicate_row >= 0:
+            self._flash_duplicate_row(duplicate_row, any_added=added > 0)
 
     def open_files_dialog(self):
         start_dir = self._settings().value(KEY_OUTPUT_FOLDER, "")
@@ -1977,10 +2404,30 @@ class MainWindow(QMainWindow):
         if files:
             self.add_files_to_table(files)
 
-    def _show_home_warning(self, visible: bool):
+    def _show_home_warning(self, visible: bool, text: str | None = None):
         if not hasattr(self, "_home_warning"):
             return
+        if visible:
+            self._home_warning.setText(text or HOME_WARNING_DEFAULT_TEXT)
         self._home_warning.setVisible(visible)
+
+    def _flash_duplicate_row(self, row: int, any_added: bool) -> None:
+        """Scroll the Home table to an existing duplicate row and surface a
+        user-facing banner explaining the skip. No programmatic selection
+        (would trip `_on_home_selection_changed` and immediately hide the
+        banner we just showed).
+        """
+        item = self.table.item(row, 0)
+        if item is not None:
+            self.table.scrollToItem(
+                item, QAbstractItemView.ScrollHint.PositionAtCenter
+            )
+        msg = (
+            "Some files were already in the list and were skipped."
+            if any_added
+            else "This file has already been added."
+        )
+        self._show_home_warning(True, text=msg)
 
     def _on_home_selection_changed(self):
         # Any real selection should clear the warning banner.
@@ -2000,14 +2447,51 @@ class MainWindow(QMainWindow):
             max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
         )
         dialog._sync_speaker_spin_enabled()
-        tr = str(self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto → English"))
-        if tr not in TRANSLATION_MODE_OPTIONS:
-            tr = "Auto → English"
-        dialog.translation_value_label.setText(tr)
+        src_lang_default = str(self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto"))
+        if src_lang_default not in SOURCE_LANGUAGE_OPTIONS:
+            src_lang_default = "Auto"
+        dialog.source_language_value_label.setText(src_lang_default)
+
+        output_mode_default = str(
+            self._settings().value(KEY_DEFAULT_OUTPUT_MODE, OUTPUT_MODE_DEFAULT)
+        )
+        if output_mode_default not in OUTPUT_MODE_OPTIONS:
+            output_mode_default = OUTPUT_MODE_DEFAULT
+        dialog.output_mode_value_label.setText(output_mode_default)
+
         if bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool)):
             dialog.timestamps_value_label.setText("Per segment")
         else:
             dialog.timestamps_value_label.setText("No timestamps")
+
+        # Phase 2 advanced-settings defaults. Values are clamped to legal
+        # choices so a stale/corrupted QSettings value can't poison the
+        # engine CLI.
+        model_default = str(
+            self._settings().value(KEY_DEFAULT_MODEL, MODEL_DEFAULT)
+        )
+        if model_default not in MODEL_OPTIONS:
+            model_default = MODEL_DEFAULT
+        dialog.model_value_label.setText(model_default)
+
+        dialog.initial_prompt_edit.setPlainText(
+            str(self._settings().value(KEY_DEFAULT_INITIAL_PROMPT, ""))
+        )
+
+        preprocess_default = str(
+            self._settings().value(KEY_DEFAULT_PREPROCESS, PREPROCESS_DEFAULT)
+        )
+        if preprocess_default not in PREPROCESS_OPTIONS:
+            preprocess_default = PREPROCESS_DEFAULT
+        dialog.preprocess_value_label.setText(preprocess_default)
+
+        dialog.split_on_speaker_checkbox.setChecked(
+            bool(
+                self._settings().value(
+                    KEY_DEFAULT_SPLIT_ON_SPEAKER, False, type=bool
+                )
+            )
+        )
 
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
@@ -2019,8 +2503,33 @@ class MainWindow(QMainWindow):
 
         diarize = dialog.diarization_checkbox.isChecked()
         num_speakers = dialog.speaker_count_spin.value()
-        translation = dialog.translation_value_label.text()
+        source_language_label = dialog.source_language_value_label.text()
+        output_mode_label = dialog.output_mode_value_label.text()
         timestamps = dialog.timestamps_value_label.text()
+
+        # Phase 2 advanced-settings values from the dialog. `model` and
+        # `preprocess_label` come from chevron dropdowns already limited
+        # to legal choices; `initial_prompt` is stripped so blank/whitespace
+        # entries don't set the flag. `preprocess_flag` is the CLI value
+        # ("none" / "normalize"); `preprocess_label` is the human-readable
+        # dropdown text kept for logging + QSettings.
+        model = dialog.model_value_label.text()
+        if model not in MODEL_OPTIONS:
+            model = MODEL_DEFAULT
+        initial_prompt = dialog.initial_prompt_edit.toPlainText().strip()
+        preprocess_label = dialog.preprocess_value_label.text()
+        if preprocess_label not in PREPROCESS_OPTIONS:
+            preprocess_label = PREPROCESS_DEFAULT
+        preprocess_flag = PREPROCESS_LABEL_TO_FLAG.get(preprocess_label, "none")
+        split_on_speaker = dialog.split_on_speaker_checkbox.isChecked()
+
+        # Persist the new values so the next job remembers them. Matches
+        # the KEY_DEFAULT_DIARIZATION pattern used elsewhere in the app.
+        s = self._settings()
+        s.setValue(KEY_DEFAULT_MODEL, model)
+        s.setValue(KEY_DEFAULT_INITIAL_PROMPT, initial_prompt)
+        s.setValue(KEY_DEFAULT_PREPROCESS, preprocess_label)
+        s.setValue(KEY_DEFAULT_SPLIT_ON_SPEAKER, bool(split_on_speaker))
 
         # Require a Hugging Face token for jobs that need it.
         token = self._get_hf_token()
@@ -2052,10 +2561,19 @@ class MainWindow(QMainWindow):
         self._add_job_record(fname=fname, full_path=full_path, status="Processing")
 
         self._job_log_path = path_key
+        # Log a presence flag for the initial prompt rather than its
+        # contents; prompts can be long vocab lists and users shouldn't
+        # have to scroll past them in the log panel.
+        initial_prompt_logged = "set" if initial_prompt else "unset"
         self._append_log(
             f"[job] Starting job for {fname} "
-            f"(translation='{translation}', diarization={diarize}, "
-            f"num_speakers={num_speakers}, timestamps='{timestamps}')"
+            f"(source_language='{source_language_label}', "
+            f"output_mode='{output_mode_label}', "
+            f"diarization={diarize}, num_speakers={num_speakers}, "
+            f"timestamps='{timestamps}', "
+            f"model='{model}', preprocess='{preprocess_flag}', "
+            f"split_on_speaker_change={split_on_speaker}, "
+            f"initial_prompt={initial_prompt_logged})"
         )
 
         python = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
@@ -2074,7 +2592,53 @@ class MainWindow(QMainWindow):
         env.insert("HUGGINGFACE_TOKEN", token)
         self._job_process.setProcessEnvironment(env)
 
-        self._job_process.start(python, [MIXBOTHTASK_PATH, full_path, str(num_speakers)])
+        out_dir = self._get_output_folder()
+
+        # Source language -> --language flag. "Auto" lets Whisper detect
+        # the source language; explicit "English"/"Spanish" skips detection.
+        language_flag = SOURCE_LANGUAGE_TO_ISO.get(source_language_label, "auto")
+
+        # Output mode -> --translate flag.
+        #   Original only          -> --translate none (transcript only)
+        #   Original + translation -> --translate auto (engine picks MT engine
+        #                             for the resolved src<->tgt pair)
+        translate_flag = OUTPUT_MODE_TO_TRANSLATE_FLAG.get(output_mode_label, "auto")
+
+        if timestamps == "Per segment":
+            timestamps_flag = "segment"
+        elif timestamps == "Per word":
+            timestamps_flag = "word"
+        else:
+            timestamps_flag = "none"
+
+        # Phase 3 technical knobs stay hardcoded on purpose: compute type
+        # auto-resolves per device inside the engine, batch size 16 matches
+        # the engine default, and previous-text conditioning stays off to
+        # avoid the known hallucination-loop failure mode on long audio.
+        engine_args = [
+            STUDIO_ENGINE_PATH,
+            full_path,
+            "--num-speakers", str(num_speakers),
+            "--diarize" if diarize else "--no-diarize",
+            "--language", language_flag,
+            "--translate", translate_flag,
+            "--timestamps", timestamps_flag,
+            "--output-dir", out_dir,
+            "--model", model,
+            "--compute-type", "auto",
+            "--batch-size", "16",
+            "--preprocess", preprocess_flag,
+            "--split-on-speaker-change" if split_on_speaker
+                else "--no-split-on-speaker-change",
+            "--no-condition-on-previous-text",
+        ]
+        # Only pass --initial-prompt when the user actually typed something.
+        # An empty string would still set the flag and confuse the engine's
+        # log line ("initial_prompt=set") even though there's no real prompt.
+        if initial_prompt:
+            engine_args += ["--initial-prompt", initial_prompt]
+
+        self._job_process.start(python, engine_args)
         if not self._job_process.waitForStarted(5000):
             self._append_log(f"[error] Failed to start job: {self._job_process.errorString()}")
             self._update_table_row_status(selected_row, "Error", pct=0)
@@ -2094,29 +2658,122 @@ class MainWindow(QMainWindow):
                         self._append_log(ln)
 
     def _on_job_stderr(self):
-        if self._job_process:
-            data = self._job_process.readAllStandardError()
-            if data:
-                for ln in data.data().decode("utf-8", errors="replace").splitlines():
-                    if ln.strip():
-                        self._append_log(ln)
+        if not self._job_process:
+            return
+        data = self._job_process.readAllStandardError()
+        if not data:
+            return
+        for ln in data.data().decode("utf-8", errors="replace").splitlines():
+            s = ln.strip()
+            if not s:
+                continue
+            if s.startswith("[event] "):
+                try:
+                    payload = json.loads(s[len("[event] "):])
+                except (ValueError, TypeError):
+                    continue
+                self._handle_engine_event(payload)
+                continue
+            self._append_log(s)
+
+    def _handle_engine_event(self, payload: dict) -> None:
+        """Translate one structured studio_engine event into UI updates.
+
+        Filtered out of the log; they drive the progress bar + status label
+        for the active row only. No-op when no job row is active.
+        """
+        kind = payload.get("event")
+        if self._current_job_row is None:
+            return
+
+        if kind == "start":
+            self._retarget_progress(pct_floor=1.0, pct_cap=5.0, status="Starting\u2026")
+            return
+
+        if kind == "stage":
+            name = str(payload.get("name") or "")
+            try:
+                pct = float(payload.get("pct") or 0.0) * 100.0
+            except (TypeError, ValueError):
+                pct = 0.0
+            label = STAGE_LABELS.get(name, name or "Processing")
+            next_cap = self._next_stage_cap(name, current_pct=pct)
+            self._retarget_progress(pct_floor=pct, pct_cap=next_cap, status=label)
+            return
+
+        if kind == "write":
+            # _write_segments fires this after each output file. The
+            # stage=write event at 0.95 already moved the bar; suppress.
+            return
+
+        if kind == "done":
+            # _on_job_finished owns the terminal 100% snap. Stash the
+            # payload so _archive_latest_outputs_for_job can use the
+            # engine-reported src/tgt and exact filenames.
+            self._last_done_event = dict(payload)
+            return
+
+        if kind == "error":
+            etype = str(payload.get("type", "Error"))
+            emsg = str(payload.get("message", "")).strip()
+            line = f"[error] {etype}: {emsg}" if emsg else f"[error] {etype}"
+            self._append_log(line)
+            return
+
+        if kind == "aborted":
+            reason = str(payload.get("reason", "")).strip()
+            self._append_log(f"[aborted] {reason}".rstrip())
+            return
+
+    def _next_stage_cap(self, name: str, current_pct: float) -> float:
+        """Return the pct (0-100) the tween should glide toward after `name`."""
+        for i, (n, _pct) in enumerate(STAGE_ORDER):
+            if n == name and i + 1 < len(STAGE_ORDER):
+                return STAGE_ORDER[i + 1][1] * 100.0
+        return max(current_pct + 5.0, 99.0)
 
     def _stop_estimated_progress(self):
         if self._progress_timer.isActive():
             self._progress_timer.stop()
         self._estimated_progress_pct = 0.0
         self._estimated_progress_row = None
+        self._estimated_progress_target = 94.0
+        self._estimated_status = "Processing"
 
     def _start_estimated_progress(self, row: int):
-        """Smooth simulated progress toward ~94% while the subprocess runs."""
+        """Smooth simulated progress toward ~94% while the subprocess runs.
+
+        Initial target is 94% so an engine that never emits [event] lines
+        behaves like the legacy timer. Real engine events call into
+        `_retarget_progress` to tighten the cap to the next stage's pct.
+        """
         self._stop_estimated_progress()
         self._estimated_progress_row = row
         self._estimated_progress_pct = 5.0
+        self._estimated_progress_target = 94.0
+        self._estimated_status = "Processing"
         col2 = self.table.cellWidget(row, 2)
         if col2 is not None:
-            self._apply_home_status_bar_style(col2, "Processing", int(self._estimated_progress_pct))
-        self._sync_jobs_status_cell_for_current_job("Processing", int(self._estimated_progress_pct))
+            self._apply_home_status_bar_style(col2, self._estimated_status, int(self._estimated_progress_pct))
+        self._sync_jobs_status_cell_for_current_job(self._estimated_status, int(self._estimated_progress_pct))
         self._progress_timer.start()
+
+    def _retarget_progress(self, pct_floor: float, pct_cap: float, status: str) -> None:
+        """Snap the tween up to pct_floor and have it glide toward pct_cap."""
+        if self._current_job_row is None:
+            return
+        self._estimated_progress_pct = max(self._estimated_progress_pct, float(pct_floor))
+        self._estimated_progress_target = max(self._estimated_progress_pct + 0.5, float(pct_cap))
+        self._estimated_status = status
+        if self._estimated_progress_row is None:
+            self._estimated_progress_row = self._current_job_row
+        row = self._current_job_row
+        col2 = self.table.cellWidget(row, 2)
+        if col2 is not None:
+            self._apply_home_status_bar_style(col2, status, int(self._estimated_progress_pct))
+        self._sync_jobs_status_cell_for_current_job(status, int(self._estimated_progress_pct))
+        if not self._progress_timer.isActive():
+            self._progress_timer.start()
 
     def _on_estimated_progress_tick(self):
         if self._job_process is None or self._current_job_row is None:
@@ -2128,13 +2785,15 @@ class MainWindow(QMainWindow):
         col2 = self.table.cellWidget(row, 2)
         if col2 is None:
             return
-        # Asymptotic approach: move smoothly toward 94%, never reach 100% until the job finishes.
-        cap = 94.0
+        # Asymptotic approach toward the current dynamic target. Real engine
+        # stage events update _estimated_progress_target to the next stage's
+        # pct; without events the target stays at 94% (legacy behavior).
+        cap = self._estimated_progress_target
         gap = cap - self._estimated_progress_pct
         self._estimated_progress_pct += max(0.04, gap * 0.0065)
         self._estimated_progress_pct = min(self._estimated_progress_pct, cap)
-        self._apply_home_status_bar_style(col2, "Processing", int(self._estimated_progress_pct))
-        self._sync_jobs_status_cell_for_current_job("Processing", int(self._estimated_progress_pct))
+        self._apply_home_status_bar_style(col2, self._estimated_status, int(self._estimated_progress_pct))
+        self._sync_jobs_status_cell_for_current_job(self._estimated_status, int(self._estimated_progress_pct))
 
     def _on_job_finished(self, exit_code: int, exit_status: QProcess.ExitStatus):
         self._stop_estimated_progress()
@@ -2169,21 +2828,33 @@ class MainWindow(QMainWindow):
             "status": status,
             "output_folder": "",
             "opened": "",
+            "transcript_path": "",
+            "translation_path": "",
+            "src_lang": "",
+            "tgt_lang": "",
+            # Back-compat for older code paths still reading these keys.
             "spanish_path": "",
             "english_path": "",
         }
         self._jobs.insert(0, rec)
         self._refresh_jobs_table()
 
+    def _apply_outputs_to_record(self, rec: dict, outputs: dict) -> None:
+        rec["output_folder"] = outputs.get("folder", "")
+        rec["transcript_path"] = outputs.get("transcript_path", "")
+        rec["translation_path"] = outputs.get("translation_path", "")
+        rec["src_lang"] = outputs.get("src_lang", "")
+        rec["tgt_lang"] = outputs.get("tgt_lang", "")
+        rec["spanish_path"] = outputs.get("spanish_path", "")
+        rec["english_path"] = outputs.get("english_path", "")
+        rec["opened"] = time.strftime("%H:%M:%S")
+
     def _update_job_record(self, fname: str, status: str, outputs: dict | None):
         for rec in self._jobs:
             if rec.get("fname") == fname and rec.get("status") == "Processing":
                 rec["status"] = status
                 if outputs:
-                    rec["output_folder"] = outputs.get("folder", "")
-                    rec["spanish_path"] = outputs.get("spanish_path", "")
-                    rec["english_path"] = outputs.get("english_path", "")
-                    rec["opened"] = time.strftime("%H:%M:%S")
+                    self._apply_outputs_to_record(rec, outputs)
                 self._refresh_jobs_table()
                 return
         # Fallback: update latest matching
@@ -2191,10 +2862,7 @@ class MainWindow(QMainWindow):
             if rec.get("fname") == fname:
                 rec["status"] = status
                 if outputs:
-                    rec["output_folder"] = outputs.get("folder", "")
-                    rec["spanish_path"] = outputs.get("spanish_path", "")
-                    rec["english_path"] = outputs.get("english_path", "")
-                    rec["opened"] = time.strftime("%H:%M:%S")
+                    self._apply_outputs_to_record(rec, outputs)
                 self._refresh_jobs_table()
                 return
 
@@ -2244,15 +2912,23 @@ class MainWindow(QMainWindow):
         return os.path.join(out_dir, f"{stem}{TRANSCRIPTION_META_SUFFIX}")
 
     def _read_transcription_meta(self, out_dir: str, stem: str) -> dict | None:
-        path = self._transcription_meta_path(out_dir, stem)
-        if not os.path.isfile(path):
-            return None
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else None
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-            return None
+        # Prefer the current sidecar name; fall back to the legacy
+        # `_transcription_meta.json` name so older runs still load.
+        candidates = [
+            os.path.join(out_dir, f"{stem}{TRANSCRIPTION_META_SUFFIX}"),
+            os.path.join(out_dir, f"{stem}{LEGACY_TRANSCRIPTION_META_SUFFIX}"),
+        ]
+        for path in candidates:
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+                continue
+        return None
 
     def _write_transcription_meta(
         self,
@@ -2287,167 +2963,393 @@ class MainWindow(QMainWindow):
 
     def _archive_latest_outputs_for_job(self, full_path: str) -> dict:
         """
-        mixbothtask.py writes fixed filenames in SCRIPT_DIR.
-        After each successful run, move them into the output folder as
-        <audio_stem>_transcription_spanish.txt / <audio_stem>_transcription_english.txt
-        (overwrites prior runs with the same stem).
+        Move the engine's ``transcription_<src>.txt`` / ``translation_<tgt>.txt``
+        outputs (written into ``--output-dir``) into role+language tagged
+        per-audio archive names::
+
+            <audio_stem>_transcription_<src>.txt
+            <audio_stem>_translation_<tgt>.txt
+
+        Source filenames come from the engine's ``done`` event when
+        available (the only authoritative source of the resolved src/tgt
+        ISO codes); otherwise we fall back to globbing the output dir for
+        the ``transcription_*.txt`` / ``translation_*.txt`` patterns.
+
+        Back-compat: the returned dict still carries ``spanish_path`` /
+        ``english_path`` keys so older Review code keeps working until it
+        migrates to the new ``transcript_path`` / ``translation_path``
+        keys.
         """
         out_dir = self._get_output_folder()
         base = os.path.splitext(os.path.basename(full_path.strip()))[0]
-        # region agent log
-        audio_dir = os.path.dirname(os.path.abspath(full_path.strip())) if full_path else ""
-        _agent_dbg(
-            "gui/main_window.py:_archive_latest_outputs_for_job",
-            "Archiving latest outputs",
-            {
-                "full_path": full_path,
-                "audio_dir": audio_dir,
-                "out_dir": os.path.abspath(out_dir) if out_dir else "",
-                "expected_audio_local_output": os.path.join(audio_dir, "output") if audio_dir else "",
-            },
-            hypothesis_id="H3",
-            run_id="pre-fix",
-        )
-        # endregion agent log
 
-        src_spanish = os.path.join(SCRIPT_DIR, OUTPUT_SPANISH_BASENAME)
-        src_english = os.path.join(SCRIPT_DIR, OUTPUT_ENGLISH_BASENAME)
+        done = self._last_done_event or {}
+        src_lang = (str(done.get("src_lang") or "")).strip().lower() or None
+        tgt_lang_raw = done.get("tgt_lang")
+        tgt_lang = (str(tgt_lang_raw or "")).strip().lower() or None
 
-        dst_spanish = os.path.join(out_dir, f"{base}_transcription_spanish.txt")
-        dst_english = os.path.join(out_dir, f"{base}_transcription_english.txt")
+        # 1. Resolve transcript source path (engine payload first, then glob).
+        src_transcript = ""
+        engine_transcript = (str(done.get("transcript_file") or "")).strip()
+        if engine_transcript and os.path.exists(engine_transcript):
+            src_transcript = engine_transcript
+        else:
+            try:
+                candidates = [
+                    os.path.join(out_dir, fn)
+                    for fn in os.listdir(out_dir)
+                    if fn.startswith(ENGINE_TRANSCRIPT_PREFIX)
+                    and fn.lower().endswith(".txt")
+                    # Engine fresh outputs are exactly transcription_<iso>.txt
+                    # (one underscore). Files already archived by us look like
+                    # <stem>_transcription_<iso>.txt (>=2 underscores) and
+                    # must be skipped.
+                    and fn.count("_") == 1
+                ]
+                candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                if candidates:
+                    src_transcript = candidates[0]
+                    if src_lang is None:
+                        stem = os.path.splitext(os.path.basename(src_transcript))[0]
+                        src_lang = stem[len(ENGINE_TRANSCRIPT_PREFIX):] or src_lang
+            except OSError:
+                pass
 
+        # 2. Resolve translation source path (same strategy).
+        src_translation = ""
+        engine_translation = (str(done.get("translation_file") or "")).strip()
+        if engine_translation and os.path.exists(engine_translation):
+            src_translation = engine_translation
+        else:
+            try:
+                candidates = [
+                    os.path.join(out_dir, fn)
+                    for fn in os.listdir(out_dir)
+                    if fn.startswith(ENGINE_TRANSLATION_PREFIX)
+                    and fn.lower().endswith(".txt")
+                    and fn.count("_") == 1
+                ]
+                candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+                if candidates:
+                    src_translation = candidates[0]
+                    if tgt_lang is None:
+                        stem = os.path.splitext(os.path.basename(src_translation))[0]
+                        tgt_lang = stem[len(ENGINE_TRANSLATION_PREFIX):] or tgt_lang
+            except OSError:
+                pass
+
+        # 3. Build destination paths and move.
         moved_any = False
-        # region agent log
-        _agent_dbg(
-            "gui/main_window.py:_archive_latest_outputs_for_job",
-            "Source/destination paths",
-            {
-                "src_spanish": src_spanish,
-                "src_english": src_english,
-                "dst_spanish": dst_spanish,
-                "dst_english": dst_english,
-                "src_spanish_exists": os.path.exists(src_spanish),
-                "src_english_exists": os.path.exists(src_english),
-            },
-            hypothesis_id="H4",
-            run_id="pre-fix",
-        )
-        # endregion agent log
-        if os.path.exists(src_spanish):
-            os.replace(src_spanish, dst_spanish)
-            moved_any = True
-        else:
-            dst_spanish = ""
-        if os.path.exists(src_english):
-            os.replace(src_english, dst_english)
-            moved_any = True
-        else:
-            dst_english = ""
+        dst_transcript = ""
+        if src_transcript and src_lang:
+            dst_transcript = os.path.join(
+                out_dir, f"{base}_transcription_{src_lang}.txt"
+            )
+            try:
+                os.replace(src_transcript, dst_transcript)
+                moved_any = True
+            except OSError:
+                dst_transcript = ""
 
+        dst_translation = ""
+        if src_translation and tgt_lang:
+            dst_translation = os.path.join(
+                out_dir, f"{base}_translation_{tgt_lang}.txt"
+            )
+            try:
+                os.replace(src_translation, dst_translation)
+                moved_any = True
+            except OSError:
+                dst_translation = ""
+
+        # 4. Back-compat: populate spanish_path / english_path so legacy
+        # readers keep working until the Review path is fully migrated.
+        spanish_path = ""
+        english_path = ""
+        for p, lang in ((dst_transcript, src_lang), (dst_translation, tgt_lang)):
+            if not p:
+                continue
+            if lang == "es":
+                spanish_path = p
+            elif lang == "en":
+                english_path = p
+
+        # Sidecar meta so Review's filesystem-scan fallback can show the
+        # original source filename as the row label and play back the
+        # source audio. Only written when we actually archived something;
+        # the stem key matches what _strip_archive_suffix returns on the
+        # just-renamed files, so _review_display_name / the scan path in
+        # _refresh_review_items pick it up.
         if moved_any:
-            # Do not write sidecar metadata files; keep outputs to .txt only.
-            pass
-        # region agent log
-        _agent_dbg(
-            "gui/main_window.py:_archive_latest_outputs_for_job",
-            "Archive result",
-            {
-                "moved_any": moved_any,
-                "final_spanish": dst_spanish,
-                "final_english": dst_english,
-                "out_dir_exists": os.path.isdir(out_dir),
-            },
-            hypothesis_id="H5",
-            run_id="pre-fix",
-        )
-        # endregion agent log
+            self._write_transcription_meta(
+                out_dir,
+                full_path,
+                base,
+                spanish_path,
+                english_path,
+            )
+
+        # Drain the captured event so the next job starts clean even if
+        # _reset_home_row_for_new_job is not called (e.g. on error paths).
+        self._last_done_event = None
 
         return {
             "folder": out_dir,
-            "spanish_path": dst_spanish,
-            "english_path": dst_english,
+            "transcript_path": dst_transcript,
+            "translation_path": dst_translation,
+            "src_lang": src_lang or "",
+            "tgt_lang": tgt_lang or "",
+            "spanish_path": spanish_path,
+            "english_path": english_path,
             "moved_any": moved_any,
         }
 
+    @staticmethod
+    def _strip_archive_suffix(path: str) -> str:
+        """Return the audio stem from an archived output filename.
+
+        Recognizes both the new ``<stem>_transcription_<iso>.txt`` /
+        ``<stem>_translation_<iso>.txt`` naming and the legacy
+        ``_transcription_spanish.txt`` / ``_transcription_english.txt`` /
+        ``_translation_english.txt`` names so the Review page keeps
+        finding older runs.
+        """
+        if not path:
+            return ""
+        bn = os.path.basename(path.strip())
+        if not bn.lower().endswith(".txt"):
+            return ""
+        stem_no_ext = bn[: -len(".txt")]
+        for marker in ("_transcription_", "_translation_"):
+            idx = stem_no_ext.rfind(marker)
+            if idx > 0:
+                return stem_no_ext[:idx]
+        return ""
+
+    def _migrate_legacy_output_filenames(self, out_dir: str) -> None:
+        """Conservative one-shot rename of legacy full-word language tags.
+
+        Legacy naming -> current naming::
+
+            <stem>_transcription_spanish.txt  ->  <stem>_transcription_es.txt
+            <stem>_transcription_english.txt  ->  <stem>_translation_en.txt
+
+        Only renames when the destination does NOT already exist and no
+        plausible new-convention counterpart is already present (to avoid
+        re-tagging a legacy file as a translation when the same stem also
+        has a real source transcript in English). Idempotent and skipped
+        after the first run per folder per session.
+        """
+        if not out_dir or not os.path.isdir(out_dir):
+            return
+        key = self._canonical_file_path(out_dir)
+        if not key or key in self._migrated_output_dirs:
+            return
+        self._migrated_output_dirs.add(key)
+
+        try:
+            names = os.listdir(out_dir)
+        except OSError:
+            return
+        name_set = set(names)
+
+        for fn in list(names):
+            if not fn.lower().endswith(".txt"):
+                continue
+            stem_no_ext = fn[: -len(".txt")]
+            if stem_no_ext.endswith("_transcription_spanish"):
+                base = stem_no_ext[: -len("_transcription_spanish")]
+                if not base:
+                    continue
+                target = f"{base}_transcription_es.txt"
+                if target in name_set:
+                    continue
+                try:
+                    os.rename(
+                        os.path.join(out_dir, fn),
+                        os.path.join(out_dir, target),
+                    )
+                    name_set.discard(fn)
+                    name_set.add(target)
+                except OSError:
+                    pass
+                continue
+            if stem_no_ext.endswith("_transcription_english"):
+                base = stem_no_ext[: -len("_transcription_english")]
+                if not base:
+                    continue
+                target = f"{base}_translation_en.txt"
+                # If a new-convention English source transcript exists,
+                # leave the legacy file alone — its semantics are
+                # ambiguous and the scanner already handles it.
+                if target in name_set:
+                    continue
+                if f"{base}_transcription_en.txt" in name_set:
+                    continue
+                try:
+                    os.rename(
+                        os.path.join(out_dir, fn),
+                        os.path.join(out_dir, target),
+                    )
+                    name_set.discard(fn)
+                    name_set.add(target)
+                except OSError:
+                    pass
+
     def _refresh_review_items(self):
         out_dir = self._get_output_folder()
+        # Lazy, once-per-session migration so legacy full-word language
+        # tags on disk start showing up under the new ISO-2 naming.
+        self._migrate_legacy_output_filenames(out_dir)
         items: list[dict] = []
+        # Canonicalized audio stems already represented by a job record so
+        # the filesystem scan below doesn't double-add the same run.
+        seen_stems: set[str] = set()
 
-        # Prefer recently completed jobs we already know about.
+        # 1. Prefer recently completed jobs we already know about.
         for rec in self._jobs:
-            if rec.get("status") == "Complete" and (rec.get("spanish_path") or rec.get("english_path")):
-                job_out = (rec.get("output_folder") or "").strip() or out_dir
-                fname = (rec.get("fname") or "").strip()
-                if not fname:
-                    fp = (rec.get("full_path") or "").strip()
-                    fname = os.path.basename(fp) if fp else ""
-                stem = ""
-                sp = (rec.get("spanish_path") or "").strip()
-                if sp:
-                    bn = os.path.basename(sp)
-                    if bn.endswith("_transcription_spanish.txt"):
-                        stem = bn[: -len("_transcription_spanish.txt")]
-                if not stem:
-                    enp = (rec.get("english_path") or "").strip()
-                    if enp:
-                        bn = os.path.basename(enp)
-                        if bn.endswith("_transcription_english.txt"):
-                            stem = bn[: -len("_transcription_english.txt")]
-                        elif bn.endswith("_translation_english.txt"):
-                            stem = bn[: -len("_translation_english.txt")]
-                if not fname and stem:
-                    fname = self._review_display_name(job_out, stem)
-                if not fname:
-                    fname = stem or "—"
+            transcript_p = (rec.get("transcript_path") or rec.get("spanish_path") or "").strip()
+            translation_p = (rec.get("translation_path") or rec.get("english_path") or "").strip()
+            if rec.get("status") != "Complete":
+                continue
+            if not (transcript_p or translation_p):
+                continue
+            job_out = (rec.get("output_folder") or "").strip() or out_dir
+            fname = (rec.get("fname") or "").strip()
+            if not fname:
+                fp = (rec.get("full_path") or "").strip()
+                fname = os.path.basename(fp) if fp else ""
+            stem = self._strip_archive_suffix(transcript_p) or self._strip_archive_suffix(translation_p)
+            if not fname and stem:
+                fname = self._review_display_name(job_out, stem)
+            if not fname:
+                fname = stem or "—"
+            if stem:
+                seen_stems.add(stem.casefold())
+            items.append(
+                {
+                    "label": fname,
+                    "folder": job_out,
+                    "audio_path": (rec.get("full_path") or "").strip(),
+                    "transcript_path": transcript_p,
+                    "translation_path": translation_p,
+                    "src_lang": rec.get("src_lang", ""),
+                    "tgt_lang": rec.get("tgt_lang", ""),
+                    # Back-compat keys.
+                    "spanish_path": rec.get("spanish_path", ""),
+                    "english_path": rec.get("english_path", ""),
+                }
+            )
+
+        # 2. Always scan the filesystem so historical runs and runs produced
+        #    by earlier sessions stay visible. Stems already represented by
+        #    a job record above are skipped via `seen_stems`.
+        if os.path.isdir(out_dir):
+            # Newest first so the "first-seen-wins" merge below prefers the
+            # most recent file when the same (stem, role, lang) slot has
+            # both a new-convention and a legacy file on disk.
+            entries: list[tuple[float, str, str]] = []
+            try:
+                for fn in os.listdir(out_dir):
+                    if not fn.lower().endswith(".txt"):
+                        continue
+                    full = os.path.join(out_dir, fn)
+                    try:
+                        mt = os.path.getmtime(full)
+                    except OSError:
+                        mt = 0.0
+                    entries.append((mt, fn, full))
+            except OSError:
+                entries = []
+            entries.sort(key=lambda e: e[0], reverse=True)
+
+            groups: dict[str, dict] = {}
+            for _mt, fn, full in entries:
+                stem_no_ext = fn[: -len(".txt")]
+                # Match either role with any language tag:
+                #   <stem>_transcription_<iso>.txt
+                #   <stem>_translation_<iso>.txt
+                key = ""
+                role = ""
+                lang = ""
+                for marker, role_name in (
+                    ("_transcription_", "transcript"),
+                    ("_translation_", "translation"),
+                ):
+                    idx = stem_no_ext.rfind(marker)
+                    if idx <= 0:
+                        continue
+                    key = stem_no_ext[:idx]
+                    lang = stem_no_ext[idx + len(marker):].lower()
+                    role = role_name
+                    break
+                if not key or not role:
+                    continue
+
+                # Normalize legacy full-word language tags. Old pipeline
+                # convention (pre-studio_engine):
+                #   <stem>_transcription_spanish.txt  -> source transcript (es)
+                #   <stem>_transcription_english.txt  -> translation (en)
+                # The second file was stamped with the `_transcription_`
+                # marker historically, but was really the translated output,
+                # so re-map role accordingly.
+                if lang == "spanish":
+                    lang = "es"
+                elif lang == "english":
+                    if role == "transcript":
+                        role = "translation"
+                    lang = "en"
+
+                g = groups.setdefault(key, {"folder": out_dir})
+                # First-seen-wins per role+lang slot. Because `entries` is
+                # sorted newest-first, newer ISO-2 files win over older
+                # legacy full-word duplicates for the same stem.
+                if role == "transcript":
+                    if not g.get("transcript_path"):
+                        g["transcript_path"] = full
+                        g["src_lang"] = lang
+                    if lang == "es" and not g.get("spanish_path"):
+                        g["spanish_path"] = full
+                    elif lang == "en" and not g.get("english_path"):
+                        g["english_path"] = full
+                else:
+                    if not g.get("translation_path"):
+                        g["translation_path"] = full
+                        g["tgt_lang"] = lang
+                    if lang == "en" and not g.get("english_path"):
+                        g["english_path"] = full
+                    elif lang == "es" and not g.get("spanish_path"):
+                        g["spanish_path"] = full
+
+            for key, g in groups.items():
+                if key.casefold() in seen_stems:
+                    continue
+                if not (g.get("transcript_path") or g.get("translation_path")):
+                    continue
+                # Resolve the meta sidecar from the directory of the matched
+                # file rather than the currently-configured out_dir so the
+                # sidecar still loads if the user switched output folders.
+                tx_path = g.get("transcript_path") or g.get("translation_path")
+                match_dir = os.path.dirname(tx_path) if tx_path else out_dir
+                meta = self._read_transcription_meta(match_dir, key)
+                ap = ""
+                if meta:
+                    ap = str(meta.get("source_full_path") or "").strip()
+                    if ap and not os.path.isfile(ap):
+                        ap = ""
                 items.append(
                     {
-                        "label": fname,
-                        "folder": job_out,
-                        "audio_path": (rec.get("full_path") or "").strip(),
-                        "spanish_path": rec.get("spanish_path", ""),
-                        "english_path": rec.get("english_path", ""),
+                        "label": self._review_display_name(match_dir, key),
+                        "folder": g.get("folder", out_dir),
+                        "audio_path": ap,
+                        "transcript_path": g.get("transcript_path", ""),
+                        "translation_path": g.get("translation_path", ""),
+                        "src_lang": g.get("src_lang", ""),
+                        "tgt_lang": g.get("tgt_lang", ""),
+                        "spanish_path": g.get("spanish_path", ""),
+                        "english_path": g.get("english_path", ""),
                     }
                 )
-
-        # If none yet, do a simple scan of the output folder for our naming scheme.
-        if not items and os.path.isdir(out_dir):
-            files = sorted(os.listdir(out_dir), reverse=True)
-            groups: dict[str, dict] = {}
-            for fn in files:
-                if not fn.lower().endswith(".txt"):
-                    continue
-                full = os.path.join(out_dir, fn)
-                key = fn
-                # Group by audio stem: <stem>_transcription_spanish.txt / <stem>_transcription_english.txt
-                if fn.endswith("_transcription_spanish.txt"):
-                    key = fn[: -len("_transcription_spanish.txt")]
-                    groups.setdefault(key, {})["spanish_path"] = full
-                elif fn.endswith("_transcription_english.txt"):
-                    key = fn[: -len("_transcription_english.txt")]
-                    groups.setdefault(key, {})["english_path"] = full
-                elif fn.endswith("_translation_english.txt"):
-                    # Legacy GUI archive name (older builds)
-                    key = fn[: -len("_translation_english.txt")]
-                    groups.setdefault(key, {})["english_path"] = full
-                groups.setdefault(key, {})["folder"] = out_dir
-            for key, g in groups.items():
-                if g.get("spanish_path") or g.get("english_path"):
-                    # Try to recover original audio path from sidecar meta (when available).
-                    meta = self._read_transcription_meta(out_dir, key)
-                    ap = ""
-                    if meta:
-                        ap = str(meta.get("source_full_path") or "").strip()
-                        if ap and not os.path.isfile(ap):
-                            ap = ""
-                    items.append(
-                        {
-                            "label": self._review_display_name(out_dir, key),
-                            "folder": g.get("folder", out_dir),
-                            "audio_path": ap,
-                            "spanish_path": g.get("spanish_path", ""),
-                            "english_path": g.get("english_path", ""),
-                        }
-                    )
 
         self._review_items = items[:200]
         if not hasattr(self, "review_selector"):
@@ -2503,16 +3405,26 @@ class MainWindow(QMainWindow):
             return
 
         # Load audio for the selected Review item (if available).
-        self._set_review_audio_source(it.get("audio_path", ""))
+        ap = (it.get("audio_path") or "").strip()
+        self._set_review_audio_source(ap)
 
         folder = it.get("folder", "")
-        sp = it.get("spanish_path", "")
-        en = it.get("english_path", "")
+        transcript_p = (it.get("transcript_path") or it.get("spanish_path") or "").strip()
+        translation_p = (it.get("translation_path") or it.get("english_path") or "").strip()
 
-        self.review_info_path.setText(f"Folder: {folder}")
+        info_lines = [f"Folder: {folder}"]
+        # Surface a missing source-audio path so the disabled play/seek
+        # controls have a visible explanation instead of looking broken.
+        if ap and not os.path.isfile(ap):
+            info_lines.append(f"Source audio not found at: {ap}")
+        self.review_info_path.setText("\n".join(info_lines))
 
-        self.spanish_preview.setPlainText(self._safe_read_text(sp) if sp else "No transcription file found.")
-        self.english_preview.setPlainText(self._safe_read_text(en) if en else "No translation file found.")
+        self.spanish_preview.setPlainText(
+            self._safe_read_text(transcript_p) if transcript_p else "No transcription file found."
+        )
+        self.english_preview.setPlainText(
+            self._safe_read_text(translation_p) if translation_p else "No translation file found."
+        )
 
     def _open_review_folder(self):
         it = self._selected_review_item()
@@ -2526,7 +3438,13 @@ class MainWindow(QMainWindow):
         it = self._selected_review_item()
         if not it:
             return
-        path = it.get("spanish_path", "") if which == "spanish" else it.get("english_path", "")
+        # Map legacy "spanish"/"english" labels to role buckets. The actual
+        # language depends on the source language for this run, but the UI
+        # column meanings are: left = source transcript, right = translation.
+        if which == "spanish":
+            path = (it.get("transcript_path") or it.get("spanish_path") or "").strip()
+        else:
+            path = (it.get("translation_path") or it.get("english_path") or "").strip()
         if path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
