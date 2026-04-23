@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 import time
 import keyring
 from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer, QEvent
@@ -57,6 +58,26 @@ except Exception:  # QtMultimedia may be unavailable in some PySide6 builds
 # Path to studio_engine.py (project root, one level above this file).
 SCRIPT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 STUDIO_ENGINE_PATH = os.path.join(SCRIPT_DIR, "studio_engine.py")
+
+
+def _resolve_engine_python():
+    """Return the Python interpreter that should run studio_engine.py.
+
+    Prefer the project's own virtualenv (``.venv`` next to studio_engine.py)
+    because it is the only environment guaranteed to have the heavy ML deps
+    (whisperx, torch, pyannote, etc.) installed. If that venv is missing —
+    e.g. a fresh clone where the user hasn't run ``python -m venv .venv`` yet —
+    fall back to whatever interpreter is currently running the GUI so we can
+    surface a meaningful error instead of QProcess's opaque
+    "execve: No such file or directory" message.
+    """
+    if os.name == "nt":
+        candidate = os.path.join(SCRIPT_DIR, ".venv", "Scripts", "python.exe")
+    else:
+        candidate = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
+    if os.path.isfile(candidate):
+        return candidate
+    return sys.executable
 
 SETTINGS_ORG = "OfflineGUI"
 SETTINGS_APP = "TopicModelingTranscription"
@@ -2576,7 +2597,16 @@ class MainWindow(QMainWindow):
             f"initial_prompt={initial_prompt_logged})"
         )
 
-        python = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
+        python = _resolve_engine_python()
+        if not os.path.isfile(python):
+            self._append_log(
+                f"[error] Python interpreter not found at {python}. "
+                "Create the project virtual environment with "
+                "`python3.10 -m venv .venv` inside Offline-GUI-Topic-Modeling/ "
+                "and install the requirements before running a job."
+            )
+            self._update_table_row_status(selected_row, "Error", pct=0)
+            return
         self._job_process = QProcess(self)
         self._current_fname = fname
         self._current_job_row = selected_row
