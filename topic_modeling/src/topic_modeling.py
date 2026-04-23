@@ -8,6 +8,7 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 from bertopic import BERTopic
 from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from hdbscan import HDBSCAN
 from umap import UMAP
 
@@ -40,7 +41,13 @@ def generate_embeddings(documents):
 
 # build topic model
 def build_topic_model():
-    vectorizer_model = CountVectorizer(stop_words="english", ngram_range=(1,2), min_df=2)
+    custom_stop_words = list(ENGLISH_STOP_WORDS.union({
+        "yes", "like", "im", "dont", "did", "oh", "okay",
+        "think", "right", "know", "really"
+    }))
+
+
+    vectorizer_model = CountVectorizer(stop_words=custom_stop_words)
 
     umap_model = UMAP(
         n_neighbors=5,
@@ -61,7 +68,7 @@ def build_topic_model():
         vectorizer_model=vectorizer_model,
         umap_model=umap_model,
         hdbscan_model=hdbscan_model,
-        nr_topics=8,
+        nr_topics=None,
         verbose=True
     )
 

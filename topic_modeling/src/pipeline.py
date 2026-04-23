@@ -39,7 +39,7 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     subprocess.run(topic_cmd, check=True)
 
     print("\n=== Pipeline complete ===")
-    print(f"Input transcript: {transcript_file}")
+    print(f"Input transcript: {input_path}")
     print(f"Cleaned transcript: {preprocessed_csv}")
     print(f"Topic results: {topic_results_csv}")
     print(f"Topic model: {topic_model_path}")
