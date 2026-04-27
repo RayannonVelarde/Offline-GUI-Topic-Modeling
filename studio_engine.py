@@ -60,8 +60,10 @@ legacy output contract from Step B):
        ffmpeg loudnorm + 80 Hz highpass prepass. Default `none`.
     5. Structured progress events on stderr.
 
-Back-compat: `--translate auto-en` is accepted as a legacy alias for
-`--translate whisper` so an un-updated GUI keeps working.
+Back-compat: `--translate` still accepts the legacy values `whisper`,
+`nllb`, and `auto-en` so an un-updated GUI keeps working. Each of them
+collapses directly to opus-mt in `run()` (with a warning log); none
+of them route through any intermediate engine.
 
 Still deferred (Step D):
     - Benchmarking campaigns on real project audio for MT choice and
@@ -105,10 +107,9 @@ COMPUTE_CHOICES = ("auto", "float32", "float16", "int8", "int8_float16")
 # Translation engine is locked to opus-mt for every translation. The
 # remaining choices (`auto`, `whisper`, `auto-en`, `nllb`) are kept only
 # so older GUI/CLI invocations keep parsing; the resolver in `run()`
-# collapses every non-`none` value to `opus-mt` whenever a target
-# language is available. `--translate none` is the only way to skip the
-# translation file. `auto-en` continues to alias to `whisper` for
-# back-compat, but both end up at opus-mt.
+# collapses every non-`none` value directly to `opus-mt` whenever a
+# target language is available. `--translate none` is the only way to
+# skip the translation file.
 TRANSLATE_CHOICES = ("auto", "none", "whisper", "auto-en", "opus-mt", "nllb")
 TIMESTAMP_CHOICES = ("none", "segment", "word")
 PREPROCESS_CHOICES = ("none", "normalize")
@@ -172,10 +173,6 @@ class EngineConfig:
     # Source language for ASR. "auto" lets Whisper detect; otherwise an
     # ISO code from LANGUAGE_CHOICES (currently "en" or "es").
     language: str = "auto"
-    # Resolved at write time by resolve_output_paths(). Names follow the
-    # `transcription_<src>.txt` / `translation_<tgt>.txt` contract.
-    transcript_output: Optional[str] = None
-    translation_output: Optional[str] = None
 
     # Auth
     hf_token: Optional[str] = None
@@ -183,18 +180,16 @@ class EngineConfig:
     def resolve_output_paths(
         self, src_iso: str, tgt_iso: Optional[str]
     ) -> tuple[Path, Optional[Path]]:
-        """Set role+language output filenames and return their full paths.
+        """Return (transcript_path, translation_path) following the
+        `transcription_<src>.txt` / `translation_<tgt>.txt` contract.
 
         ``tgt_iso`` is None when no translation will be produced
         (``--translate none`` or no target language).
         """
-        self.transcript_output = f"transcription_{src_iso}.txt"
-        transcript_path = self.output_dir / self.transcript_output
+        transcript_path = self.output_dir / f"transcription_{src_iso}.txt"
         if tgt_iso is None:
-            self.translation_output = None
             return transcript_path, None
-        self.translation_output = f"translation_{tgt_iso}.txt"
-        return transcript_path, self.output_dir / self.translation_output
+        return transcript_path, self.output_dir / f"translation_{tgt_iso}.txt"
 
 
 # --------------------------------------------------------------------------- #
@@ -321,7 +316,7 @@ def _resolve_compute_type(requested: str, device: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def stage_load_audio(config: EngineConfig, log: Logger, audio_path: Path):
+def stage_load_audio(log: Logger, audio_path: Path):
     import whisperx
 
     log("Loading audio...")
@@ -790,7 +785,7 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
     audio_path = _maybe_preprocess_audio(config.audio_path, config.preprocess, log)
 
     _emit_event("stage", name="load_audio", pct=0.05)
-    audio = stage_load_audio(config, log, audio_path)
+    audio = stage_load_audio(log, audio_path)
 
     # -------- ASR --------
     _emit_event("stage", name="load_asr", pct=0.10)
@@ -859,7 +854,6 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
         log(f"WARN: alignment failed for {src_iso}: {exc!r}. Continuing without word-level alignment.")
 
     # -------- diarization + speaker assignment --------
-    diarize_df = None
     if config.diarize:
         _emit_event("stage", name="diarize", pct=0.60)
         diarize_segments = stage_diarize(audio, config, device, log)
@@ -874,7 +868,6 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
                 "No diarization turns produced; segments will be written with "
                 "speaker=Unknown."
             )
-            diarize_df = None
     else:
         log("Diarization disabled; segments will be written with speaker=Unknown.")
 
