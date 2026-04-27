@@ -43,12 +43,14 @@ legacy output contract from Step B):
        CLI default model stays `small` for fast/stable GUI behavior;
        bump to `large-v3` once performance testing on real project
        audio has signed off on the trade-off.
-    2. Dedicated MT — `--translate opus-mt` (Helsinki-NLP/opus-mt-es-en)
-       and `--translate nllb` (NLLB-200-distilled-600M) replace re-running
-       Whisper's translate head. English segments inherit Spanish timing
-       and speaker labels segment-by-segment. CLI default stays
-       `whisper` so the English file matches legacy output until the
-       GUI explicitly opts in.
+    2. Dedicated MT — opus-mt (Helsinki-NLP/opus-mt-{src}-{tgt}) is the
+       only translator the engine will run after transcription. Whatever
+       `--translate` value the caller passes (`auto`, `whisper`, `nllb`,
+       `auto-en`, or `opus-mt`), the resolver collapses it to opus-mt as
+       long as a target language is set. `--translate none` still skips
+       the translation file. Translated segments inherit the source
+       segment's timing and speaker label segment-by-segment, no Whisper
+       second pass required.
     3. Diarize-then-split — `stage_split_segments_by_speaker` walks
        word-level speakers and splits a segment wherever adjacent words
        disagree. Fixes the "one segment, two speakers" collapse. Off by
@@ -100,11 +102,13 @@ MODEL_CHOICES = (
     "large-v3-turbo",
 )
 COMPUTE_CHOICES = ("auto", "float32", "float16", "int8", "int8_float16")
-# "auto-en" is kept as a legacy alias for "whisper" so an un-updated GUI
-# keeps working. "auto" is the new default and resolves to "whisper" when
-# the chosen target language is English, "opus-mt" otherwise (Whisper's
-# translate head only targets English). Normalized in `_config_from_args`
-# / `run()`.
+# Translation engine is locked to opus-mt for every translation. The
+# remaining choices (`auto`, `whisper`, `auto-en`, `nllb`) are kept only
+# so older GUI/CLI invocations keep parsing; the resolver in `run()`
+# collapses every non-`none` value to `opus-mt` whenever a target
+# language is available. `--translate none` is the only way to skip the
+# translation file. `auto-en` continues to alias to `whisper` for
+# back-compat, but both end up at opus-mt.
 TRANSLATE_CHOICES = ("auto", "none", "whisper", "auto-en", "opus-mt", "nllb")
 TRANSLATE_ALIASES = {"auto-en": "whisper"}
 TIMESTAMP_CHOICES = ("none", "segment", "word")
@@ -162,10 +166,10 @@ class EngineConfig:
     initial_prompt: Optional[str] = None
 
     # Translation
-    # "auto" picks the right engine for the resolved (src, tgt) pair:
-    #   * tgt == "en"  -> "whisper" (Whisper translate head)
-    #   * tgt != "en"  -> "opus-mt" (Whisper translate head can't target it)
-    # Explicit values bypass the auto resolution.
+    # opus-mt is forced for every translation. The accepted values are
+    # kept for back-compat, but the resolver in `run()` collapses
+    # everything except "none" to "opus-mt" once a target language is
+    # known. "none" still skips the translation file.
     translate: str = "auto"  # "auto" | "none" | "whisper" | "opus-mt" | "nllb"
 
     # Output / audio
@@ -879,40 +883,30 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
     # languages produce no translation file.
     tgt_iso = DEFAULT_TARGET_FOR_SOURCE.get(src_iso)
 
-    # Resolve --translate auto: Whisper's translate head can only target
-    # English, so we use it when tgt_iso == "en", else fall back to opus-mt.
-    translate_mode = config.translate
-    if translate_mode == "auto":
-        if tgt_iso is None:
-            translate_mode = "none"
-        elif tgt_iso == "en":
-            translate_mode = "whisper"
-        else:
-            translate_mode = "opus-mt"
-        log(f"Resolved --translate auto -> {translate_mode} (tgt={tgt_iso}).")
-    elif translate_mode == "whisper" and tgt_iso != "en":
-        # Whisper's translate head is hard-coded to English. Refuse silently
-        # would be worse; promote to opus-mt instead and tell the user.
-        log(
-            f"WARN: --translate whisper requested but target is {tgt_iso}; "
-            "Whisper's translate head only targets English. Falling back to opus-mt."
-        )
-        translate_mode = "opus-mt"
-    elif translate_mode != "none" and tgt_iso is None:
+    # Translation engine is locked to opus-mt for every translation,
+    # regardless of which `--translate` value the caller passed. The
+    # remaining `whisper`/`nllb`/`auto-en` choices are kept only for
+    # back-compat with older GUI/CLI invocations; they all collapse to
+    # opus-mt below.
+    requested = config.translate
+    if requested != "none" and tgt_iso is None:
         log(
             f"WARN: no default translation target for source '{src_iso}'; "
             "skipping translation output."
         )
         translate_mode = "none"
-
-    # Optional Whisper-based translation. Run while the ASR model is still
-    # loaded so we don't pay to re-instantiate it.
-    whisper_translation = None
-    if translate_mode == "whisper":
-        _emit_event("stage", name="transcribe_whisper_translate", pct=0.35)
-        whisper_translation = stage_transcribe_whisper_translate(
-            asr_model, audio, config, src_iso, log
-        )
+    elif requested == "none":
+        translate_mode = "none"
+    else:
+        translate_mode = "opus-mt"
+        if requested == "auto":
+            log(f"Resolved --translate auto -> opus-mt (tgt={tgt_iso}).")
+        elif requested != "opus-mt":
+            log(
+                f"--translate={requested} requested, but engine is locked "
+                f"to opus-mt for all translations. Using opus-mt for "
+                f"{src_iso}->{tgt_iso}."
+            )
 
     # -------- alignment (source-language) --------
     _emit_event("stage", name="align", pct=0.45)
@@ -937,10 +931,6 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
             result_source = stage_assign_speakers(
                 diarize_df, result_source, log, src_iso
             )
-            if whisper_translation is not None:
-                whisper_translation = stage_assign_speakers(
-                    diarize_df, whisper_translation, log, tgt_iso or "translation"
-                )
         else:
             log(
                 "No diarization turns produced; segments will be written with "
@@ -956,32 +946,22 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
         result_source = stage_split_segments_by_speaker(
             result_source, log, src_iso
         )
-        if whisper_translation is not None:
-            # Whisper translate segments don't carry word-level speakers, so
-            # this is a no-op in practice — but we run it for symmetry and to
-            # log the fact.
-            whisper_translation = stage_split_segments_by_speaker(
-                whisper_translation, log, tgt_iso or "translation"
-            )
 
     # -------- translation (MT) --------
+    # Every translation goes through opus-mt. `translate_mode` is now
+    # always "none" or "opus-mt" thanks to the resolver above.
     result_translation = None
-    if translate_mode == "whisper":
-        result_translation = whisper_translation
-    elif translate_mode in ("opus-mt", "nllb"):
+    if translate_mode == "opus-mt":
         _emit_event("stage", name="translate_mt", pct=0.85)
-        # Reuse config.translate for the engine name in messages but pass
-        # the resolved one explicitly so "auto" doesn't leak through.
+        # `_build_mt_pipeline` reads `config.translate` to pick the engine
+        # name, so make sure it sees "opus-mt" regardless of what the
+        # caller originally passed (e.g. "auto", "whisper", "nllb").
         config_for_mt = config
-        if config.translate == "auto":
-            # _build_mt_pipeline reads config.translate; flip it locally so
-            # the engine selection is correct without mutating the caller's
-            # config more than needed.
-            config_for_mt.translate = translate_mode
+        if config.translate != "opus-mt":
+            config_for_mt.translate = "opus-mt"
         result_translation = stage_translate_mt(
             result_source, config_for_mt, src_iso, tgt_iso, device, log
         )
-    # else: translate_mode == "none" -> result_translation stays None.
 
     # -------- resolve output paths --------
     effective_tgt = tgt_iso if result_translation is not None else None
@@ -1100,13 +1080,12 @@ def _parse_args(argv=None) -> argparse.Namespace:
     # Translation
     p.add_argument(
         "--translate", choices=TRANSLATE_CHOICES, default="auto",
-        help="Translation engine. 'auto' (default) picks Whisper's translate "
-        "head when the resolved target is English, opus-mt otherwise. "
-        "'none' skips the translation file entirely. 'whisper' forces "
-        "Whisper's translate head (English target only). 'opus-mt' uses a "
-        "Helsinki-NLP/opus-mt model from OPUS_MT_MODELS. 'nllb' uses "
-        "facebook/nllb-200-distilled-600M. 'auto-en' is a legacy alias "
-        "for 'whisper' kept for GUI back-compat.",
+        help="Translation engine. opus-mt (Helsinki-NLP/opus-mt-{src}-{tgt} "
+        "from OPUS_MT_MODELS) is forced for every translation, so the "
+        "only meaningful choice is between producing a translation "
+        "('auto'/'opus-mt'/'whisper'/'nllb'/'auto-en' — all collapse to "
+        "opus-mt) and skipping it ('none'). The non-opus-mt values are "
+        "kept only for back-compat with older GUI/CLI invocations.",
     )
 
     # Source language
