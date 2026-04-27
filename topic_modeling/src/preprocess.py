@@ -9,10 +9,15 @@ def extract_metadata(line):
     speaker = None
     timestamp = None
 
-    timestamp_match = re.search(r"\[?(\d{2}:\d{2}:\d{2})\]?", line)
+    timestamp_match = re.search(r"\[(\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*→\s*\d{2}:\d{2}:\d{2}(?:\.\d+)?)?)\]", line)
     if timestamp_match:
         timestamp = timestamp_match.group(1)
-    line_no_time = re.sub(r"\[?\d{2}:\d{2}:\d{2}\]?\s*", "", line)
+
+    line_no_time = re.sub(
+        r"\[\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*→\s*\d{2}:\d{2}:\d{2}(?:\.\d+)?)?\]\s*",
+        "",
+        line
+    )
 
     speaker_match = re.match(r"^\s*\[?([^\]:]+)\]?:\s*", line_no_time)
     if speaker_match:
@@ -22,7 +27,11 @@ def extract_metadata(line):
 
 # remove timestamps and speaker labels
 def clean_text(line):
-    line = re.sub(r"\[?\d{2}:\d{2}:\d{2}\]?\s*", "", line)
+    line = re.sub(
+        r"\[\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\s*→\s*\d{2}:\d{2}:\d{2}(?:\.\d+)?)?\]\s*",
+        "",
+        line
+    )
     line = re.sub(r"^\s*\[?[^\]:]+\]?:\s*", "", line)
     return line.strip()
 
@@ -37,12 +46,13 @@ def word_count(text):
     return len(str(text).split())
 
 # build one segment record
-def make_segment(segment_id, speaker, role, include_in_topic_model, cleaned_text, source_file):
+def make_segment(segment_id, speaker, role, include_in_topic_model, cleaned_text, source_file, timestamp=None):
     return {
         "segment_id": segment_id,
         "speaker": speaker,
         "role": role,
         "include_in_topic_model": include_in_topic_model,
+        "timestamp": timestamp,
         "cleaned_text": cleaned_text,
         "source_file": source_file
     }
@@ -59,7 +69,7 @@ def build_initial_segments(file_path, interviewer_speaker=None):
             if not line:
                 continue
 
-            speaker, _ = extract_metadata(line)
+            speaker, timestamp = extract_metadata(line)
             cleaned = clean_text(line)
 
             if not cleaned:
@@ -76,7 +86,7 @@ def build_initial_segments(file_path, interviewer_speaker=None):
             if current_segment is None:
                 current_segment = make_segment(
                     segment_id, speaker, role, include_in_topic_model,
-                    cleaned, os.path.basename(file_path)
+                    cleaned, os.path.basename(file_path), timestamp
                 )
                 continue
 
@@ -87,7 +97,7 @@ def build_initial_segments(file_path, interviewer_speaker=None):
                 segment_id += 1
                 current_segment = make_segment(
                     segment_id, speaker, role, include_in_topic_model,
-                    cleaned, os.path.basename(file_path)
+                    cleaned, os.path.basename(file_path), timestamp
                 )
 
     if current_segment is not None:
@@ -104,7 +114,8 @@ def merge_when_interviewer_excluded(segments):
     if not included:
         return pd.DataFrame(columns=[
             "segment_id", "speaker", "role",
-            "include_in_topic_model", "cleaned_text", "source_file"
+            "include_in_topic_model", "timestamp",
+            "cleaned_text", "source_file"
         ])
 
     merged = []
