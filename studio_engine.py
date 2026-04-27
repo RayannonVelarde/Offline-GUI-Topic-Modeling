@@ -110,14 +110,11 @@ COMPUTE_CHOICES = ("auto", "float32", "float16", "int8", "int8_float16")
 # translation file. `auto-en` continues to alias to `whisper` for
 # back-compat, but both end up at opus-mt.
 TRANSLATE_CHOICES = ("auto", "none", "whisper", "auto-en", "opus-mt", "nllb")
-TRANSLATE_ALIASES = {"auto-en": "whisper"}
 TIMESTAMP_CHOICES = ("none", "segment", "word")
 PREPROCESS_CHOICES = ("none", "normalize")
 LANGUAGE_CHOICES = ("auto", "en", "es")
 
 PYANNOTE_SAMPLE_RATE = 16000  # matches whisperx.load_audio's output rate
-
-NLLB_MODEL = "facebook/nllb-200-distilled-600M"
 
 # Source ISO -> default target ISO when the GUI/user did not override.
 # Spanish pairs with English; English pairs with Spanish.
@@ -130,10 +127,6 @@ OPUS_MT_MODELS = {
     ("es", "en"): "Helsinki-NLP/opus-mt-es-en",
     ("en", "es"): "Helsinki-NLP/opus-mt-en-es",
 }
-
-# NLLB language tags. Used for `--translate nllb` and as a fallback when
-# opus-mt lacks a model for a given (src, tgt) pair.
-NLLB_TAG = {"en": "eng_Latn", "es": "spa_Latn"}
 
 
 # --------------------------------------------------------------------------- #
@@ -569,8 +562,7 @@ def _build_mt_pipeline(
 ):
     """
     Return a callable ``translate(texts: list[str]) -> list[str]`` for the
-    requested (src, tgt) pair. Hides the model-specific ctor differences
-    between opus-mt and NLLB behind one interface.
+    requested (src, tgt) pair using opus-mt.
     """
     from transformers import pipeline as hf_pipeline
 
@@ -581,7 +573,7 @@ def _build_mt_pipeline(
         if model_id is None:
             raise ValueError(
                 f"No opus-mt model registered for {src_iso}->{tgt_iso}. "
-                f"Use --translate nllb or extend OPUS_MT_MODELS."
+                f"Extend OPUS_MT_MODELS."
             )
         log(f"Loading MT model {model_id}...")
         translator = hf_pipeline(
@@ -590,29 +582,6 @@ def _build_mt_pipeline(
 
         def translate(texts: List[str]) -> List[str]:
             outs = translator(texts, batch_size=16, max_length=512, truncation=True)
-            return [o["translation_text"] for o in outs]
-
-        return translate
-
-    if translator_name == "nllb":
-        src_tag = NLLB_TAG.get(src_iso)
-        tgt_tag = NLLB_TAG.get(tgt_iso)
-        if src_tag is None or tgt_tag is None:
-            raise ValueError(
-                f"No NLLB language tag registered for {src_iso}->{tgt_iso}. "
-                f"Extend NLLB_TAG."
-            )
-        log(f"Loading MT model {NLLB_MODEL} ({src_tag} -> {tgt_tag})...")
-        translator = hf_pipeline(
-            "translation",
-            model=NLLB_MODEL,
-            device=hf_device,
-            src_lang=src_tag,
-            tgt_lang=tgt_tag,
-        )
-
-        def translate(texts: List[str]) -> List[str]:
-            outs = translator(texts, batch_size=8, max_length=512, truncation=True)
             return [o["translation_text"] for o in outs]
 
         return translate
@@ -1091,10 +1060,6 @@ def _config_from_args(args: argparse.Namespace) -> EngineConfig:
     except Exception:
         pass
 
-    # Normalize legacy translate aliases (e.g. "auto-en" → "whisper") so
-    # downstream code only sees canonical values.
-    translate = TRANSLATE_ALIASES.get(args.translate, args.translate)
-
     return EngineConfig(
         audio_path=args.audio,
         num_speakers=args.num_speakers,
@@ -1105,7 +1070,7 @@ def _config_from_args(args: argparse.Namespace) -> EngineConfig:
         batch_size=args.batch_size,
         condition_on_previous_text=args.condition_on_previous_text,
         initial_prompt=args.initial_prompt,
-        translate=translate,
+        translate=args.translate,
         timestamps=args.timestamps,
         preprocess=args.preprocess,
         output_dir=args.output_dir,

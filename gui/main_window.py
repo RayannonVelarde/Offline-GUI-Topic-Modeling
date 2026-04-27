@@ -224,12 +224,6 @@ OUTPUT_MODE_TO_TRANSLATE_FLAG: dict[str, str] = {
 }
 OUTPUT_MODE_DEFAULT = "Original + translation"
 
-# Legacy aliases kept so any external import keeps resolving. New code
-# should use SOURCE_LANGUAGE_OPTIONS / OUTPUT_MODE_OPTIONS.
-AUDIO_LANGUAGE_OPTIONS: list[str] = SOURCE_LANGUAGE_OPTIONS
-AUDIO_LANGUAGE_TO_ISO: dict[str, str] = SOURCE_LANGUAGE_TO_ISO
-TRANSLATION_MODE_OPTIONS: list[str] = SOURCE_LANGUAGE_OPTIONS
-
 TIMESTAMP_MODE_OPTIONS: list[str] = ["No timestamps", "Per segment", "Per word"]
 
 # Phase 2 advanced settings. Options match studio_engine.py's CLI choices.
@@ -461,13 +455,6 @@ class JobOptionsDialog(QDialog):
         outer.addSpacing(4)
         outer.addWidget(self.advanced_toggle_btn, 0, Qt.AlignmentFlag.AlignLeft)
         outer.addWidget(self.advanced_container)
-
-        # Back-compat aliases: earlier revisions of this file referenced
-        # `translation_field` / `translation_value_label` as the single
-        # translation control. Any leftover external code (tests, demos)
-        # now sees the source-language picker.
-        self.translation_field = self.source_language_field
-        self.translation_value_label = self.source_language_value_label
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
