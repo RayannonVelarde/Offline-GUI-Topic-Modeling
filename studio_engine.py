@@ -121,9 +121,10 @@ PYANNOTE_SAMPLE_RATE = 16000  # matches whisperx.load_audio's output rate
 # Spanish pairs with English; English pairs with Spanish.
 DEFAULT_TARGET_FOR_SOURCE = {"es": "en", "en": "es"}
 
-# (src, tgt) -> opus-mt model id. Used for `--translate opus-mt` and for
-# `--translate auto` whenever the target is not English (Whisper's
-# translate head can only target English).
+# (src, tgt) -> opus-mt model id. opus-mt is the only translation engine
+# the engine runs: every non-`none` `--translate` value (`auto`,
+# `opus-mt`, and the back-compat `whisper`/`nllb`/`auto-en`) collapses to
+# opus-mt in `run()`, regardless of target language.
 OPUS_MT_MODELS = {
     ("es", "en"): "Helsinki-NLP/opus-mt-es-en",
     ("en", "es"): "Helsinki-NLP/opus-mt-en-es",
@@ -372,10 +373,9 @@ def stage_align(segments, audio, device: str, language_code: str, log: Logger):
 
     Alignment is source-language-specific: the wav2vec2 CTC head's
     vocabulary is per-language, so running an es head on en audio (and
-    vice versa) is structurally broken. The translation output carries
-    either Whisper's segment-level timestamps (when ``--translate
-    whisper``) or the source segments' timing reused segment-by-segment
-    (when ``--translate opus-mt`` / ``nllb``).
+    vice versa) is structurally broken. The translation output reuses
+    the source segments' timing segment-by-segment (opus-mt is the only
+    MT engine), so it does not need its own alignment pass.
     """
     import whisperx
 
@@ -481,8 +481,9 @@ def stage_split_segments_by_speaker(result, log: Logger, label: str):
     words disagree on speaker. Preserves everything else (text is rebuilt
     by joining the word tokens of each sub-group).
 
-    No-op on segments that lack word-level speaker info — e.g. English
-    output from Whisper's translate head, or any unaligned segment.
+    No-op on segments that lack word-level speaker info — e.g. any
+    segment that wasn't aligned, or whose words didn't get speaker
+    labels assigned.
     """
     new_segments: List[dict] = []
     split_count = 0
@@ -549,7 +550,6 @@ def stage_split_segments_by_speaker(result, log: Logger, label: str):
 
 
 def _build_mt_pipeline(
-    translator_name: str,
     src_iso: str,
     tgt_iso: str,
     device: str,
@@ -563,30 +563,26 @@ def _build_mt_pipeline(
 
     hf_device = 0 if device == "cuda" else -1
 
-    if translator_name == "opus-mt":
-        model_id = OPUS_MT_MODELS.get((src_iso, tgt_iso))
-        if model_id is None:
-            raise ValueError(
-                f"No opus-mt model registered for {src_iso}->{tgt_iso}. "
-                f"Extend OPUS_MT_MODELS."
-            )
-        log(f"Loading MT model {model_id}...")
-        translator = hf_pipeline(
-            "translation", model=model_id, device=hf_device
+    model_id = OPUS_MT_MODELS.get((src_iso, tgt_iso))
+    if model_id is None:
+        raise ValueError(
+            f"No opus-mt model registered for {src_iso}->{tgt_iso}. "
+            f"Extend OPUS_MT_MODELS."
         )
+    log(f"Loading MT model {model_id}...")
+    translator = hf_pipeline(
+        "translation", model=model_id, device=hf_device
+    )
 
-        def translate(texts: List[str]) -> List[str]:
-            outs = translator(texts, batch_size=16, max_length=512, truncation=True)
-            return [o["translation_text"] for o in outs]
+    def translate(texts: List[str]) -> List[str]:
+        outs = translator(texts, batch_size=16, max_length=512, truncation=True)
+        return [o["translation_text"] for o in outs]
 
-        return translate
-
-    raise ValueError(f"Unsupported MT translator: {translator_name!r}")
+    return translate
 
 
 def stage_translate_mt(
     source_result,
-    translator_name: str,
     src_iso: str,
     tgt_iso: str,
     device: str,
@@ -607,11 +603,11 @@ def stage_translate_mt(
         log(f"No {src_iso} segments to translate.")
         return {"segments": []}
 
-    translate = _build_mt_pipeline(translator_name, src_iso, tgt_iso, device, log)
+    translate = _build_mt_pipeline(src_iso, tgt_iso, device, log)
 
     log(
         f"Translating {len(segments)} segments {src_iso}->{tgt_iso} "
-        f"with {translator_name}..."
+        f"with opus-mt..."
     )
     texts = [(seg.get("text") or "").strip() for seg in segments]
     translated_texts = translate(texts)
@@ -664,8 +660,8 @@ def _format_line(segment, mode: str) -> str:
       segment  -> "[HH:MM:SS.mmm → HH:MM:SS.mmm] [SPEAKER_XX]: text"
       word     -> "[SPEAKER_XX]: [ts]word1 [ts]word2 ..."
                   (falls back to segment formatting if the segment has no
-                  word-level timing — e.g. English from Whisper translate,
-                  or any MT output that inherited segment-level timing)
+                  word-level timing — e.g. MT output that inherited
+                  segment-level timing, or any unaligned segment)
     """
     speaker = segment.get("speaker") or "Unknown"
     text = (segment.get("text") or "").strip()
@@ -886,7 +882,7 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
         _emit_event("stage", name="translate_mt", pct=0.85)
         assert tgt_iso is not None, "translate_mode=='opus-mt' implies tgt_iso is set"
         result_translation = stage_translate_mt(
-            result_source, "opus-mt", src_iso, tgt_iso, device, log
+            result_source, src_iso, tgt_iso, device, log
         )
 
     # -------- resolve output paths --------
@@ -905,7 +901,7 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
             result_translation,
             translation_path,
             log,
-            tgt_iso or "translation",
+            tgt_iso,
             config.timestamps,
         )
 
