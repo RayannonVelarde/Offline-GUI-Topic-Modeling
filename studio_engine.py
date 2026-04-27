@@ -20,8 +20,8 @@ Subprocess contract (called by gui/main_window.py):
 Outputs (written to --output-dir, default = this script's directory so the
 GUI rename logic in _archive_latest_outputs_for_job finds them):
 
-    transcription_spanish.txt   (always)
-    transcription_english.txt   (only when --translate != none)
+    transcription_<src_iso>.txt   (always; e.g. transcription_es.txt)
+    translation_<tgt_iso>.txt     (only when --translate != none; e.g. translation_en.txt)
 
 stdout:
     Free-text `[engine] …` log lines for the GUI's log panel.
@@ -373,23 +373,6 @@ def stage_transcribe(asr_model, audio, config: EngineConfig, log: Logger):
     log(f"Transcribing audio (source language: {config.language})...")
     return asr_model.transcribe(
         audio, batch_size=config.batch_size, language=config.language
-    )
-
-
-def stage_transcribe_whisper_translate(
-    asr_model, audio, config: EngineConfig, src_iso: str, log: Logger
-):
-    """Run Whisper's translate head (always targets English).
-
-    Caller resolves the source ISO from the transcribe result so this works
-    even when ``config.language == "auto"``.
-    """
-    log(f"Running Whisper translate head ({src_iso} -> en)...")
-    return asr_model.transcribe(
-        audio,
-        batch_size=config.batch_size,
-        language=src_iso,
-        task="translate",
     )
 
 
@@ -801,15 +784,6 @@ def _select_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _warn_about_known_bad_combos(config: EngineConfig, log: Logger) -> None:
-    if config.translate == "whisper" and config.model == "large-v3-turbo":
-        log(
-            "WARN: --translate whisper with --model large-v3-turbo: turbo's "
-            "translation head is noticeably degraded from distillation. "
-            "Consider --translate opus-mt or --model large-v3."
-        )
-
-
 def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
     """Execute the pipeline end-to-end for one audio file."""
     log = log or _make_logger()
@@ -831,7 +805,6 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
         f"split_on_speaker_change={config.split_on_speaker_change}, "
         f"preprocess={config.preprocess}"
     )
-    _warn_about_known_bad_combos(config, log)
 
     _emit_event(
         "start",
@@ -949,6 +922,7 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
     result_translation = None
     if translate_mode == "opus-mt":
         _emit_event("stage", name="translate_mt", pct=0.85)
+        assert tgt_iso is not None, "translate_mode=='opus-mt' implies tgt_iso is set"
         result_translation = stage_translate_mt(
             result_source, "opus-mt", src_iso, tgt_iso, device, log
         )
