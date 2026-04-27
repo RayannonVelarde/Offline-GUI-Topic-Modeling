@@ -113,29 +113,6 @@ TRANSCRIPTION_META_SUFFIX = "_job_meta.json"
 # metadata keeps loading. New writes go to TRANSCRIPTION_META_SUFFIX.
 LEGACY_TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
 
-# region agent log
-_DEBUG_LOG_PATH = "/Users/lucasmontoya/Desktop/Senior_Project/TheChosenOne/.cursor/debug-45bbf1.log"
-_DEBUG_SESSION_ID = "45bbf1"
-
-
-def _agent_dbg(location: str, message: str, data: dict, *, hypothesis_id: str, run_id: str) -> None:
-    try:
-        payload = {
-            "sessionId": _DEBUG_SESSION_ID,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": int(time.time() * 1000),
-        }
-        with open(_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    except Exception:
-        pass
-
-# endregion agent log
-
 # Home file table viewport: medium default, grow with real row/widget heights, cap then scroll.
 HOME_TABLE_MIN_H = 260
 HOME_TABLE_ABSOLUTE_MAX_PX = 720  # hard cap (rare); usual cap is available space below table top
@@ -753,6 +730,16 @@ class MainWindow(QMainWindow):
             app.installEventFilter(self)
 
     def closeEvent(self, event):
+        # Terminate the engine subprocess if a job is still running so the
+        # heavy ML models don't keep consuming CPU/GPU after the window
+        # closes. terminate() sends SIGTERM; kill() is the SIGKILL fallback
+        # for engines that don't respond quickly during model load.
+        proc = self._job_process
+        if proc is not None and proc.state() != QProcess.ProcessState.NotRunning:
+            proc.terminate()
+            if not proc.waitForFinished(3000):
+                proc.kill()
+                proc.waitForFinished(1000)
         app = QApplication.instance()
         if app is not None:
             app.removeEventFilter(self)
@@ -918,29 +905,11 @@ class MainWindow(QMainWindow):
         Settings; the computed fallback is returned in-memory only.
         """
         saved = self._settings().value(KEY_OUTPUT_FOLDER, "")
-        # region agent log
-        _agent_dbg(
-            "gui/main_window.py:_get_output_folder",
-            "Resolving output folder",
-            {"saved_setting": str(saved) if saved is not None else None, "script_dir": SCRIPT_DIR},
-            hypothesis_id="H1",
-            run_id="pre-fix",
-        )
-        # endregion agent log
         if isinstance(saved, str) and saved.strip():
             path = saved.strip()
         else:
             path = os.path.join(SCRIPT_DIR, "outputs")
         os.makedirs(path, exist_ok=True)
-        # region agent log
-        _agent_dbg(
-            "gui/main_window.py:_get_output_folder",
-            "Output folder resolved/ensured",
-            {"resolved_path": os.path.abspath(path), "exists": os.path.isdir(path)},
-            hypothesis_id="H2",
-            run_id="pre-fix",
-        )
-        # endregion agent log
         return path
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
@@ -2676,6 +2645,7 @@ class MainWindow(QMainWindow):
             self._job_log_path = None
             self._current_job_row = None
             self._current_fname = None
+            self._current_full_path = None
         else:
             self._start_estimated_progress(selected_row)
 
@@ -2843,6 +2813,11 @@ class MainWindow(QMainWindow):
                 self._append_log(f"[job] Job failed for {self._current_fname} (exit code {exit_code}).")
                 self._update_table_row_status(self._current_job_row, "Error", pct=0)
                 self._update_job_record(fname=self._current_fname, status="Error", outputs=None)
+                # _archive_latest_outputs_for_job is the only other place
+                # that drains _last_done_event, and we skip it on failure.
+                # Clear here so a stale done payload from a partially
+                # successful run can't carry into the next job.
+                self._last_done_event = None
         self._job_process = None
         self._job_log_path = None
         self._current_job_row = None

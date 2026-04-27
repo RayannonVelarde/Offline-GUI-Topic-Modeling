@@ -203,10 +203,6 @@ class EngineConfig:
         self.translation_output = f"translation_{tgt_iso}.txt"
         return transcript_path, self.output_dir / self.translation_output
 
-    @property
-    def uses_mt_translator(self) -> bool:
-        return self.translate in ("opus-mt", "nllb")
-
 
 # --------------------------------------------------------------------------- #
 # Logging and structured events
@@ -643,7 +639,7 @@ def _build_mt_pipeline(
 
 def stage_translate_mt(
     source_result,
-    config: EngineConfig,
+    translator_name: str,
     src_iso: str,
     tgt_iso: str,
     device: str,
@@ -664,11 +660,11 @@ def stage_translate_mt(
         log(f"No {src_iso} segments to translate.")
         return {"segments": []}
 
-    translate = _build_mt_pipeline(config.translate, src_iso, tgt_iso, device, log)
+    translate = _build_mt_pipeline(translator_name, src_iso, tgt_iso, device, log)
 
     log(
         f"Translating {len(segments)} segments {src_iso}->{tgt_iso} "
-        f"with {config.translate}..."
+        f"with {translator_name}..."
     )
     texts = [(seg.get("text") or "").strip() for seg in segments]
     translated_texts = translate(texts)
@@ -953,14 +949,8 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
     result_translation = None
     if translate_mode == "opus-mt":
         _emit_event("stage", name="translate_mt", pct=0.85)
-        # `_build_mt_pipeline` reads `config.translate` to pick the engine
-        # name, so make sure it sees "opus-mt" regardless of what the
-        # caller originally passed (e.g. "auto", "whisper", "nllb").
-        config_for_mt = config
-        if config.translate != "opus-mt":
-            config_for_mt.translate = "opus-mt"
         result_translation = stage_translate_mt(
-            result_source, config_for_mt, src_iso, tgt_iso, device, log
+            result_source, "opus-mt", src_iso, tgt_iso, device, log
         )
 
     # -------- resolve output paths --------
