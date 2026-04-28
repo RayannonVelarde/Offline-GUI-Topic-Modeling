@@ -55,9 +55,11 @@ from stylesheet import THEME_DARK, THEME_LIGHT, get_stylesheet
 from nav_icons import (
     make_disclosure_chevron_icon,
     make_folder_open_icon,
+    make_highlighter_icon,
     make_log_output_icon,
     make_nav_icon,
     make_open_external_icon,
+    make_pencil_icon,
     make_remove_icon,
 )
 
@@ -717,6 +719,9 @@ class MainWindow(QMainWindow):
         self._review_sync_line_count: int = 0
         self._review_highlight_idx: int | None = None
         self._review_highlight_translation: bool = False
+        self._review_highlight_enabled: bool = True
+        self._review_transcript_path: str = ""
+        self._review_translation_path: str = ""
         # When *_segments.json is missing, build equal-length slices after media duration is known.
         self._review_fallback_tx_lines: int = 0
         # Output folders we have already attempted legacy-filename migration
@@ -1264,9 +1269,37 @@ class MainWindow(QMainWindow):
             self.review_vol.setToolTip("Audio playback unavailable (QtMultimedia not installed).")
             self.review_play_btn.setToolTip("Audio playback unavailable (QtMultimedia not installed).")
 
+        _sync_muted_col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        _sync_active_col = "#3b82f6"
+
+        self.review_sync_btn = QToolButton()
+        self.review_sync_btn.setObjectName("review-sync-btn")
+        self.review_sync_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.review_sync_btn.setIcon(make_highlighter_icon(size=14, color_hex=_sync_active_col))
+        self.review_sync_btn.setIconSize(QSize(14, 14))
+        self.review_sync_btn.setToolTip("Highlight text as audio plays")
+        self.review_sync_btn.setCheckable(True)
+        self.review_sync_btn.setChecked(True)
+        self.review_sync_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.review_sync_btn.setAutoRaise(True)
+        self.review_sync_btn.setFixedSize(22, 22)
+
+        def _on_sync_toggled(checked: bool) -> None:
+            self._review_highlight_enabled = checked
+            self.review_sync_btn.setIcon(
+                make_highlighter_icon(
+                    size=14, color_hex=_sync_active_col if checked else _sync_muted_col
+                )
+            )
+            if not checked:
+                self._apply_review_segment_highlight(None)
+
+        self.review_sync_btn.toggled.connect(_on_sync_toggled)
+
         player_layout.addWidget(self.review_play_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         player_layout.addWidget(self.review_seek, 1, Qt.AlignmentFlag.AlignVCenter)
         player_layout.addWidget(self.review_time_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        player_layout.addWidget(self.review_sync_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         player_layout.addWidget(self.review_vol, 0, Qt.AlignmentFlag.AlignVCenter)
         info_layout.addWidget(player)
 
@@ -1305,7 +1338,38 @@ class MainWindow(QMainWindow):
         self.review_open_transcript_btn.clicked.connect(
             lambda: self._open_review_file(which="spanish")
         )
+        self.review_edit_transcript_btn = QToolButton()
+        self.review_edit_transcript_btn.setObjectName("review-edit-transcript-btn")
+        self.review_edit_transcript_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        self.review_edit_transcript_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.review_edit_transcript_btn.setIcon(make_pencil_icon(size=14, color_hex=_review_file_muted))
+        self.review_edit_transcript_btn.setIconSize(QSize(14, 14))
+        self.review_edit_transcript_btn.setFixedSize(22, 22)
+        self.review_edit_transcript_btn.setToolTip("Edit transcription")
+        self.review_edit_transcript_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.review_edit_transcript_btn.setAutoRaise(True)
+        self.review_edit_transcript_btn.setCheckable(True)
+
+        def _on_transcript_edit_toggled(checked: bool) -> None:
+            self.review_edit_transcript_btn.setIcon(
+                make_pencil_icon(size=14, color_hex=_sync_active_col if checked else _review_file_muted)
+            )
+            if checked:
+                self.spanish_preview.setReadOnly(False)
+            else:
+                self.spanish_preview.setReadOnly(True)
+                path = self._review_transcript_path
+                if path:
+                    try:
+                        with open(path, "w", encoding="utf-8") as fh:
+                            fh.write(self.spanish_preview.toPlainText())
+                    except OSError:
+                        pass
+
+        self.review_edit_transcript_btn.toggled.connect(_on_transcript_edit_toggled)
+
         left_header_lay.addWidget(left_title, 1, Qt.AlignmentFlag.AlignVCenter)
+        left_header_lay.addWidget(self.review_edit_transcript_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         left_header_lay.addWidget(self.review_open_transcript_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         left_layout.addWidget(left_header)
         self.spanish_preview = QTextEdit()
@@ -1339,7 +1403,38 @@ class MainWindow(QMainWindow):
         self.review_open_translation_btn.clicked.connect(
             lambda: self._open_review_file(which="english")
         )
+        self.review_edit_translation_btn = QToolButton()
+        self.review_edit_translation_btn.setObjectName("review-edit-translation-btn")
+        self.review_edit_translation_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        self.review_edit_translation_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.review_edit_translation_btn.setIcon(make_pencil_icon(size=14, color_hex=_review_file_muted))
+        self.review_edit_translation_btn.setIconSize(QSize(14, 14))
+        self.review_edit_translation_btn.setFixedSize(22, 22)
+        self.review_edit_translation_btn.setToolTip("Edit translation")
+        self.review_edit_translation_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.review_edit_translation_btn.setAutoRaise(True)
+        self.review_edit_translation_btn.setCheckable(True)
+
+        def _on_translation_edit_toggled(checked: bool) -> None:
+            self.review_edit_translation_btn.setIcon(
+                make_pencil_icon(size=14, color_hex=_sync_active_col if checked else _review_file_muted)
+            )
+            if checked:
+                self.english_preview.setReadOnly(False)
+            else:
+                self.english_preview.setReadOnly(True)
+                path = self._review_translation_path
+                if path:
+                    try:
+                        with open(path, "w", encoding="utf-8") as fh:
+                            fh.write(self.english_preview.toPlainText())
+                    except OSError:
+                        pass
+
+        self.review_edit_translation_btn.toggled.connect(_on_translation_edit_toggled)
+
         right_header_lay.addWidget(right_title, 1, Qt.AlignmentFlag.AlignVCenter)
+        right_header_lay.addWidget(self.review_edit_translation_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         right_header_lay.addWidget(self.review_open_translation_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         right_layout.addWidget(right_header)
         self.english_preview = QTextEdit()
@@ -1436,7 +1531,8 @@ class MainWindow(QMainWindow):
             self.review_seek.setValue(max(0, int(pos_ms)))
         dur = 0 if self._review_player is None else int(self._review_player.duration())
         self.review_time_lbl.setText(f"{self._format_ms(pos_ms)} / {self._format_ms(dur)}")
-        self._sync_review_highlight_from_time_ms(int(pos_ms))
+        if self._review_highlight_enabled:
+            self._sync_review_highlight_from_time_ms(int(pos_ms))
 
     def _on_review_seek_preview(self, pos_ms: int):
         dur = 0 if self._review_player is None else int(self._review_player.duration())
@@ -1525,32 +1621,6 @@ class MainWindow(QMainWindow):
                 else:
                     row.addWidget(ww, 0, Qt.AlignmentFlag.AlignVCenter)
             return w
-
-        def _persist_settings_from_ui() -> None:
-            s = self._settings()
-            if hasattr(self, "default_diarization_checkbox"):
-                s.setValue(KEY_DEFAULT_DIARIZATION, bool(self.default_diarization_checkbox.isChecked()))
-            if hasattr(self, "default_speaker_spin"):
-                s.setValue(KEY_DEFAULT_NUM_SPEAKERS, int(self.default_speaker_spin.value()))
-            if hasattr(self, "default_timestamps_checkbox"):
-                s.setValue(KEY_DEFAULT_TIMESTAMPS, bool(self.default_timestamps_checkbox.isChecked()))
-            # The chevron menus already persist on pick, so these Save-time
-            # writes are belt-and-suspenders: they keep the latest shown
-            # value authoritative even if a menu callback failed to fire.
-            if hasattr(self, "default_source_language_value"):
-                s.setValue(
-                    KEY_DEFAULT_TRANSLATION,
-                    str(self.default_source_language_value.text()),
-                )
-            if hasattr(self, "default_output_mode_value"):
-                s.setValue(
-                    KEY_DEFAULT_OUTPUT_MODE,
-                    str(self.default_output_mode_value.text()),
-                )
-            if hasattr(self, "output_folder_edit"):
-                s.setValue(KEY_OUTPUT_FOLDER, str(self.output_folder_edit.text()).strip())
-            if hasattr(self, "auto_open_output_checkbox"):
-                s.setValue(KEY_AUTO_OPEN_OUTPUT, bool(self.auto_open_output_checkbox.isChecked()))
 
         # ── Appearance card ──────────────────────────────────────────────────
         appearance_card, appearance_layout = _make_card("Appearance")
@@ -1734,8 +1804,29 @@ class MainWindow(QMainWindow):
         )
         defaults_form.addRow(_make_label("Output mode:"), output_mode_field)
 
-        # Label in the form column + bare checkbox avoids long caption clipping in QCheckBox.
-        self.default_timestamps_checkbox = QCheckBox()
+        # Default model dropdown.
+        self.default_model_options = list(MODEL_OPTIONS)
+        current_model = str(
+            self._settings().value(KEY_DEFAULT_MODEL, MODEL_DEFAULT)
+        )
+        if current_model not in self.default_model_options:
+            current_model = MODEL_DEFAULT
+
+        (
+            model_field,
+            self.default_model_value,
+            self.default_model_chevron_btn,
+            self.default_model_menu,
+        ) = _make_settings_chevron_dropdown(
+            self.default_model_options,
+            current_model,
+            "settings-model-menu",
+            lambda text: self._settings().setValue(KEY_DEFAULT_MODEL, str(text)),
+        )
+        defaults_form.addRow(_make_label("Default model:"), model_field)
+
+        # Label in the form column + checkbox avoids long caption clipping in QCheckBox.
+        self.default_timestamps_checkbox = QCheckBox("Include timestamps in output")
         self.default_timestamps_checkbox.setAccessibleName("Timestamps")
         self.default_timestamps_checkbox.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
@@ -1845,20 +1936,6 @@ class MainWindow(QMainWindow):
         integration_layout.addWidget(integration_body)
         layout.addWidget(integration_card)
 
-        # ── Bottom actions ──────────────────────────────────────────────────
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(10)
-        btn_row.addStretch(1)
-
-        save_btn = QPushButton("Save settings")
-        save_btn.setObjectName("start-btn")
-        save_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        save_btn.setFixedWidth(140)
-        save_btn.clicked.connect(_persist_settings_from_ui)
-        btn_row.addWidget(save_btn, 0, Qt.AlignmentFlag.AlignRight)
-
-        layout.addLayout(btn_row)
         layout.addStretch()
 
         center_row.addWidget(content_host, 0, Qt.AlignmentFlag.AlignTop)
@@ -3734,6 +3811,12 @@ class MainWindow(QMainWindow):
         folder = it.get("folder", "")
         transcript_p = (it.get("transcript_path") or it.get("spanish_path") or "").strip()
         translation_p = (it.get("translation_path") or it.get("english_path") or "").strip()
+        self._review_transcript_path = transcript_p
+        self._review_translation_path = translation_p
+        if hasattr(self, "review_edit_transcript_btn") and self.review_edit_transcript_btn.isChecked():
+            self.review_edit_transcript_btn.setChecked(False)
+        if hasattr(self, "review_edit_translation_btn") and self.review_edit_translation_btn.isChecked():
+            self.review_edit_translation_btn.setChecked(False)
         seg_path = (it.get("segments_path") or "").strip()
         if not seg_path and transcript_p:
             cand = os.path.join(

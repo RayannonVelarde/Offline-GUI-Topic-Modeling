@@ -71,6 +71,16 @@ _SVG_PARTS: dict[str, str] = {
 <line x1="18" y1="6" x2="6" y2="18"/>
 <line x1="6" y1="6" x2="18" y2="18"/>
 """,
+    # Lucide-style pencil/edit icon. Used for Review page per-panel edit toggle.
+    "pencil": """
+<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+<path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+""",
+    # Marker/highlighter icon. Used for Review page sync-highlight toggle.
+    "highlighter": """
+<path d="M15.5 2.1 21.9 8.5 8.9 21.5 2.5 21.9l.4-6.4z"/>
+<line x1="11" y1="13" x2="14" y2="10"/>
+""",
 }
 
 
@@ -131,3 +141,13 @@ def make_open_external_icon(*, size: int = 14, color_hex: str = "#475569") -> QI
 def make_remove_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
     """Minimal X icon for the Home row 'Remove from list' action."""
     return _render_stroke_icon("x_close", size=size, color_hex=color_hex)
+
+
+def make_pencil_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Pencil/edit icon for the Review page per-panel edit toggle."""
+    return _render_stroke_icon("pencil", size=size, color_hex=color_hex)
+
+
+def make_highlighter_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Marker/highlighter icon for the Review page sync-highlight toggle."""
+    return _render_stroke_icon("highlighter", size=size, color_hex=color_hex)
