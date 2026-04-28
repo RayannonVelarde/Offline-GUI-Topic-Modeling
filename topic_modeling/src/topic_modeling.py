@@ -35,7 +35,15 @@ def load_data(file_path):
 
 # generate sentence embeddings using multilingual embedding model
 def generate_embeddings(documents):
-    model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    model_path = Path(__file__).resolve().parent.parent / "models" / "paraphrase-multilingual-MiniLM-L12-v2"
+
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"Embedding model not found at {model_path}. "
+            "Run: python download_models.py"
+        )
+
+    model = SentenceTransformer(str(model_path))
     embeddings = model.encode(documents, show_progress_bar=True)
     return embeddings
 

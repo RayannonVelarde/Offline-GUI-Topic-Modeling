@@ -17,6 +17,22 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+## Download Embedding Model (Required Once)
+
+This project runs fully offline. Before running topic modeling, download the embedding model:
+
+```bash
+python src/download_models.py
+```
+
+This will save the model to:
+
+```text
+models/paraphrase-multilingual-MiniLM-L12-v2/
+```
+
+This step only needs to be done once.
+
 ### Optional: Local LLM (Ollama for labeling)
 
 Install Ollama and download a model:
