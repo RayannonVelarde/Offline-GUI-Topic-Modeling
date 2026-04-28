@@ -21,12 +21,12 @@ QMainWindow, QWidget {
 #sidebar {
     background-color: #eef2f7; /* subtle blue-gray */
     border-right: 1px solid #d7dee8;
-    min-width: 180px;
-    max-width: 180px;
+    min-width: 288px;
+    max-width: 288px;
 }
 
 #sidebar-logo {
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 700;
     color: #0f172a;
     padding: 4px 0px;
@@ -37,7 +37,7 @@ QMainWindow, QWidget {
 }
 
 #sidebar-sub {
-    font-size: 11px;
+    font-size: 12px;
     color: #64748b;
     padding: 0px;
     background-color: transparent;
@@ -50,9 +50,9 @@ QMainWindow, QWidget {
     color: #475569;
     border: none;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 11px 16px;
     text-align: left;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
 }
 #nav-btn:hover {
@@ -64,15 +64,15 @@ QMainWindow, QWidget {
     color: #ffffff;
     border: none;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 11px 16px;
     text-align: left;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
 }
 
 #version-label {
     color: #94a3b8;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 /* ── Theme toggle ── */
@@ -204,6 +204,20 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     background-color: transparent;
 }
 
+#review-page QToolButton#review-open-folder-btn,
+#review-page QToolButton#review-open-transcript-btn,
+#review-page QToolButton#review-open-translation-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#review-page QToolButton#review-open-folder-btn:hover,
+#review-page QToolButton#review-open-transcript-btn:hover,
+#review-page QToolButton#review-open-translation-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
+
 /* ── Review previews ── */
 #review-preview {
     background-color: #ffffff;
@@ -212,7 +226,9 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     padding: 8px 10px;
     color: #0f172a;
     font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-    font-size: 11px;
+    font-size: 14px;
+    selection-background-color: #bfdbfe;
+    selection-color: #0f172a;
 }
 
 /* ── Review audio player ── */
@@ -550,12 +566,12 @@ QMainWindow, QWidget {
 #sidebar {
     background-color: #0a0d13;
     border-right: 1px solid #1e2433;
-    min-width: 180px;
-    max-width: 180px;
+    min-width: 288px;
+    max-width: 288px;
 }
 
 #sidebar-logo {
-    font-size: 15px;
+    font-size: 17px;
     font-weight: 700;
     color: #f1f5f9;
     padding: 4px 0px;
@@ -566,7 +582,7 @@ QMainWindow, QWidget {
 }
 
 #sidebar-sub {
-    font-size: 11px;
+    font-size: 12px;
     color: #475569;
     padding: 0px;
     background-color: transparent;
@@ -579,9 +595,9 @@ QMainWindow, QWidget {
     color: #94a3b8;
     border: none;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 11px 16px;
     text-align: left;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
 }
 #nav-btn:hover {
@@ -593,15 +609,15 @@ QMainWindow, QWidget {
     color: #ffffff;
     border: none;
     border-radius: 8px;
-    padding: 9px 14px;
+    padding: 11px 16px;
     text-align: left;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
 }
 
 #version-label {
     color: #334155;
-    font-size: 11px;
+    font-size: 12px;
 }
 
 /* ── Theme toggle ── */
@@ -722,6 +738,20 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     background-color: transparent;
 }
 
+#review-page QToolButton#review-open-folder-btn,
+#review-page QToolButton#review-open-transcript-btn,
+#review-page QToolButton#review-open-translation-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#review-page QToolButton#review-open-folder-btn:hover,
+#review-page QToolButton#review-open-transcript-btn:hover,
+#review-page QToolButton#review-open-translation-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+}
+
 /* ── Review previews ── */
 #review-preview {
     background-color: #0f1117;
@@ -730,7 +760,9 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     padding: 8px 10px;
     color: #e2e8f0;
     font-family: 'JetBrains Mono', 'Fira Code', 'Courier New', monospace;
-    font-size: 11px;
+    font-size: 14px;
+    selection-background-color: #1e3a5f;
+    selection-color: #f1f5f9;
 }
 
 /* ── Review audio player ── */

@@ -60,6 +60,12 @@ _SVG_PARTS: dict[str, str] = {
 <line x1="8" y1="17" x2="16" y2="17"/>
 <line x1="8" y1="9" x2="11" y2="9"/>
 """,
+    # Open in external app / default handler (Review column headers).
+    "open_external": """
+<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+<polyline points="15 3 21 3 21 9"/>
+<line x1="10" y1="14" x2="21" y2="3"/>
+""",
     # Minimal X (Lucide-style). Used for the Home row "Remove from list" button.
     "x_close": """
 <line x1="18" y1="6" x2="6" y2="18"/>
@@ -115,6 +121,11 @@ def make_disclosure_chevron_icon(*, expanded: bool, size: int = 14, color_hex: s
 def make_log_output_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
     """Document-with-lines icon for inline job log show/hide (Home filename row)."""
     return _render_stroke_icon("log_output", size=size, color_hex=color_hex)
+
+
+def make_open_external_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+    """Window-with-arrow-out icon: open file in default application (Review headers)."""
+    return _render_stroke_icon("open_external", size=size, color_hex=color_hex)
 
 
 def make_remove_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:

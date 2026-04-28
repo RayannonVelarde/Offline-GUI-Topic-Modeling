@@ -1,10 +1,21 @@
 import json
 import os
+import re
 import sys
 import time
 import keyring
 from PySide6.QtCore import QPoint, Qt, QProcess, QSettings, QUrl, QSize, QProcessEnvironment, QTimer, QEvent
-from PySide6.QtGui import QColor, QDesktopServices, QTextCharFormat, QTextCursor, QPainter, QPen, QMouseEvent, QTextOption
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QTextCharFormat,
+    QTextCursor,
+    QTextFormat,
+    QPainter,
+    QPen,
+    QMouseEvent,
+    QTextOption,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -46,6 +57,7 @@ from nav_icons import (
     make_folder_open_icon,
     make_log_output_icon,
     make_nav_icon,
+    make_open_external_icon,
     make_remove_icon,
 )
 
@@ -112,6 +124,21 @@ TRANSCRIPTION_META_SUFFIX = "_job_meta.json"
 # Legacy sidecar name; still read so older runs' audio-path / display-name
 # metadata keeps loading. New writes go to TRANSCRIPTION_META_SUFFIX.
 LEGACY_TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
+# Sidecar from studio_engine (per audio stem): <stem>_segments.json
+REVIEW_SEGMENTS_SUFFIX = "_segments.json"
+# Cap Review transcript preview lines so QTextBlock index stays aligned with segment index.
+REVIEW_PREVIEW_MAX_LINES = 500
+
+# Transcript line from studio_engine with --timestamps=segment, e.g.
+# [00:00:03.200 → 00:00:07.800] [SPEAKER_00]: Hello
+_TRANSCRIPT_SEGMENT_LINE_RE = re.compile(
+    r"^\[(\d{2}):(\d{2}):(\d{2}\.\d{3})\s*→\s*(\d{2}):(\d{2}):(\d{2}\.\d{3})\]\s+\[([^\]]+)\]:\s*(.*)$"
+)
+
+
+def _hms_to_seconds(h: str, m: str, s: str) -> float:
+    return int(h, 10) * 3600 + int(m, 10) * 60 + float(s)
+
 
 # Home file table viewport: medium default, grow with real row/widget heights, cap then scroll.
 HOME_TABLE_MIN_H = 260
@@ -354,6 +381,12 @@ class JobOptionsDialog(QDialog):
         self.timestamps_field, self.timestamps_value_label, _ = self._make_chevron_dropdown(
             TIMESTAMP_MODE_OPTIONS, "No timestamps", chev_col
         )
+        _ts_tip = (
+            "Controls whether timestamps appear in the exported .txt files. "
+            "Segment timing is always saved for Review (sidecar JSON) and audio sync."
+        )
+        self.timestamps_field.setToolTip(_ts_tip)
+        ts_lbl.setToolTip(_ts_tip)
 
         # Advanced settings section. Collapsed by default so the dialog
         # stays compact for the common case; users who care about the
@@ -680,6 +713,12 @@ class MainWindow(QMainWindow):
         self._theme = THEME_LIGHT
         self._jobs: list[dict] = []
         self._review_items: list[dict] = []
+        self._review_segments: list[dict] = []
+        self._review_sync_line_count: int = 0
+        self._review_highlight_idx: int | None = None
+        self._review_highlight_translation: bool = False
+        # When *_segments.json is missing, build equal-length slices after media duration is known.
+        self._review_fallback_tx_lines: int = 0
         # Output folders we have already attempted legacy-filename migration
         # on this session. Keyed by canonicalized absolute path.
         self._migrated_output_dirs: set[str] = set()
@@ -782,10 +821,18 @@ class MainWindow(QMainWindow):
         self._refresh_nav_icons()
         self._refresh_home_folder_row_icons()
         self._refresh_jobs_folder_row_icons()
+        self._refresh_review_page_action_icons()
         self._refresh_home_log_disclosure_icons()
         self._refresh_home_remove_row_icons()
         self._refresh_settings_disclosure_icons()
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
+        if hasattr(self, "spanish_preview"):
+            prev = self._review_highlight_idx
+            self._review_highlight_idx = None
+            if prev is not None:
+                self._apply_review_segment_highlight(prev)
+            elif self._review_player is not None and self._review_segments:
+                self._sync_review_highlight_from_time_ms(int(self._review_player.position()))
 
     def _refresh_settings_disclosure_icons(self) -> None:
         """Update Settings chevron icons when theme changes."""
@@ -847,6 +894,21 @@ class MainWindow(QMainWindow):
                     btn.setIcon(make_folder_open_icon(size=icon_sz, color_hex=inactive))
                     btn.setIconSize(QSize(icon_sz, icon_sz))
                     break
+
+    def _refresh_review_page_action_icons(self) -> None:
+        """Review header actions: folder + open-file icons (same stroke family as Home/Jobs)."""
+        inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        icon_sz = 14
+        sz = QSize(icon_sz, icon_sz)
+        folder_btn = getattr(self, "review_open_folder_btn", None)
+        if folder_btn is not None:
+            folder_btn.setIcon(make_folder_open_icon(size=icon_sz, color_hex=inactive))
+            folder_btn.setIconSize(sz)
+        for attr in ("review_open_transcript_btn", "review_open_translation_btn"):
+            btn = getattr(self, attr, None)
+            if btn is not None:
+                btn.setIcon(make_open_external_icon(size=icon_sz, color_hex=inactive))
+                btn.setIconSize(sz)
 
     def _refresh_home_log_disclosure_icons(self) -> None:
         """Update Home action-column log/document icons when theme changes (stroke color)."""
@@ -1121,6 +1183,21 @@ class MainWindow(QMainWindow):
         self.review_selector.currentIndexChanged.connect(self._on_review_selection_changed)
         selector_row.addWidget(selector_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         selector_row.addWidget(self.review_selector, stretch=1, alignment=Qt.AlignmentFlag.AlignVCenter)
+        _review_folder_muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        self.review_open_folder_btn = QToolButton()
+        self.review_open_folder_btn.setObjectName("review-open-folder-btn")
+        self.review_open_folder_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        self.review_open_folder_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.review_open_folder_btn.setIcon(
+            make_folder_open_icon(size=14, color_hex=_review_folder_muted)
+        )
+        self.review_open_folder_btn.setIconSize(QSize(14, 14))
+        self.review_open_folder_btn.setFixedSize(22, 22)
+        self.review_open_folder_btn.setToolTip("Open containing folder")
+        self.review_open_folder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.review_open_folder_btn.setAutoRaise(True)
+        self.review_open_folder_btn.clicked.connect(self._open_review_folder)
+        selector_row.addWidget(self.review_open_folder_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         info_layout.addLayout(selector_row)
 
         self.review_info_path = QLabel("")
@@ -1206,9 +1283,31 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(16, 14, 16, 14)
         left_layout.setSpacing(10)
+        left_header = QWidget()
+        left_header_lay = QHBoxLayout(left_header)
+        left_header_lay.setContentsMargins(0, 0, 0, 0)
+        left_header_lay.setSpacing(8)
         left_title = QLabel("Transcription output")
         left_title.setObjectName("section-title")
-        left_layout.addWidget(left_title)
+        _review_file_muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        self.review_open_transcript_btn = QToolButton()
+        self.review_open_transcript_btn.setObjectName("review-open-transcript-btn")
+        self.review_open_transcript_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        self.review_open_transcript_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.review_open_transcript_btn.setIcon(
+            make_open_external_icon(size=14, color_hex=_review_file_muted)
+        )
+        self.review_open_transcript_btn.setIconSize(QSize(14, 14))
+        self.review_open_transcript_btn.setFixedSize(22, 22)
+        self.review_open_transcript_btn.setToolTip("Open transcription file")
+        self.review_open_transcript_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.review_open_transcript_btn.setAutoRaise(True)
+        self.review_open_transcript_btn.clicked.connect(
+            lambda: self._open_review_file(which="spanish")
+        )
+        left_header_lay.addWidget(left_title, 1, Qt.AlignmentFlag.AlignVCenter)
+        left_header_lay.addWidget(self.review_open_transcript_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        left_layout.addWidget(left_header)
         self.spanish_preview = QTextEdit()
         self.spanish_preview.setObjectName("review-preview")
         self.spanish_preview.setReadOnly(True)
@@ -1219,9 +1318,30 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(16, 14, 16, 14)
         right_layout.setSpacing(10)
+        right_header = QWidget()
+        right_header_lay = QHBoxLayout(right_header)
+        right_header_lay.setContentsMargins(0, 0, 0, 0)
+        right_header_lay.setSpacing(8)
         right_title = QLabel("Translation output")
         right_title.setObjectName("section-title")
-        right_layout.addWidget(right_title)
+        self.review_open_translation_btn = QToolButton()
+        self.review_open_translation_btn.setObjectName("review-open-translation-btn")
+        self.review_open_translation_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        self.review_open_translation_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.review_open_translation_btn.setIcon(
+            make_open_external_icon(size=14, color_hex=_review_file_muted)
+        )
+        self.review_open_translation_btn.setIconSize(QSize(14, 14))
+        self.review_open_translation_btn.setFixedSize(22, 22)
+        self.review_open_translation_btn.setToolTip("Open translation file")
+        self.review_open_translation_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.review_open_translation_btn.setAutoRaise(True)
+        self.review_open_translation_btn.clicked.connect(
+            lambda: self._open_review_file(which="english")
+        )
+        right_header_lay.addWidget(right_title, 1, Qt.AlignmentFlag.AlignVCenter)
+        right_header_lay.addWidget(self.review_open_translation_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        right_layout.addWidget(right_header)
         self.english_preview = QTextEdit()
         self.english_preview.setObjectName("review-preview")
         self.english_preview.setReadOnly(True)
@@ -1236,23 +1356,6 @@ class MainWindow(QMainWindow):
         page._apply_layout_mode()
         layout.addWidget(compare, stretch=1)
 
-        # Bottom action row
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        self.open_spanish_btn = QPushButton("Open transcription file")
-        self.open_spanish_btn.setObjectName("add-btn")
-        self.open_spanish_btn.clicked.connect(lambda: self._open_review_file(which="spanish"))
-        self.open_english_btn = QPushButton("Open translation file")
-        self.open_english_btn.setObjectName("add-btn")
-        self.open_english_btn.clicked.connect(lambda: self._open_review_file(which="english"))
-        self.open_folder_btn = QPushButton("Open containing folder")
-        self.open_folder_btn.setObjectName("add-btn")
-        self.open_folder_btn.clicked.connect(self._open_review_folder)
-        btn_row.addWidget(self.open_spanish_btn)
-        btn_row.addWidget(self.open_english_btn)
-        btn_row.addStretch()
-        btn_row.addWidget(self.open_folder_btn)
-        layout.addLayout(btn_row)
         return page
 
     @staticmethod
@@ -1312,16 +1415,33 @@ class MainWindow(QMainWindow):
         self.review_seek.setRange(0, max(0, int(dur_ms)))
         pos = 0 if self._review_player is None else int(self._review_player.position())
         self.review_time_lbl.setText(f"{self._format_ms(pos)} / {self._format_ms(dur_ms)}")
+        if getattr(self, "_review_fallback_tx_lines", 0) > 0 and not self._review_segments:
+            self._try_build_uniform_review_segments(self._review_fallback_tx_lines, int(dur_ms))
+            if self._review_segments:
+                self._review_fallback_tx_lines = 0
+                left_bc = self.spanish_preview.document().blockCount()
+                if self._review_highlight_translation:
+                    right_bc = self.english_preview.document().blockCount()
+                    self._review_sync_line_count = min(
+                        self._review_sync_line_count, left_bc, right_bc, len(self._review_segments)
+                    )
+                else:
+                    self._review_sync_line_count = min(
+                        self._review_sync_line_count, left_bc, len(self._review_segments)
+                    )
+                self._sync_review_highlight_from_time_ms(pos)
 
     def _on_review_media_position(self, pos_ms: int):
         if not self.review_seek.isDragging():
             self.review_seek.setValue(max(0, int(pos_ms)))
         dur = 0 if self._review_player is None else int(self._review_player.duration())
         self.review_time_lbl.setText(f"{self._format_ms(pos_ms)} / {self._format_ms(dur)}")
+        self._sync_review_highlight_from_time_ms(int(pos_ms))
 
     def _on_review_seek_preview(self, pos_ms: int):
         dur = 0 if self._review_player is None else int(self._review_player.duration())
         self.review_time_lbl.setText(f"{self._format_ms(pos_ms)} / {self._format_ms(dur)}")
+        self._sync_review_highlight_from_time_ms(int(pos_ms))
 
     def _on_review_seek_commit(self):
         if self._review_player is None:
@@ -1621,7 +1741,8 @@ class MainWindow(QMainWindow):
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         self.default_timestamps_checkbox.setToolTip(
-            "When enabled, new jobs use per-segment timestamps by default."
+            "When enabled, new jobs default to per-segment timestamps in the exported .txt. "
+            "Timing for the Review page is always stored in the segment sidecar, independent of this."
         )
         self.default_timestamps_checkbox.setChecked(
             bool(self._settings().value(KEY_DEFAULT_TIMESTAMPS, True, type=bool))
@@ -1630,6 +1751,7 @@ class MainWindow(QMainWindow):
             lambda v: self._settings().setValue(KEY_DEFAULT_TIMESTAMPS, bool(v))
         )
         ts_label = _make_label("Timestamps:")
+        ts_label.setToolTip(self.default_timestamps_checkbox.toolTip())
         ts_label.setBuddy(self.default_timestamps_checkbox)
         ts_row = QWidget()
         ts_lay = QHBoxLayout(ts_row)
@@ -2266,7 +2388,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(remove_btn, 0, Qt.AlignmentFlag.AlignTop)
         return wrap
 
-    def _build_home_status_cell(self, status: str) -> QWidget:
+    def _build_home_status_cell(self, status: str, top_anchor: bool = True) -> QWidget:
         sw = QWidget()
         sw.setObjectName("home-status-cell")
         sw.setAutoFillBackground(False)
@@ -2285,10 +2407,19 @@ class MainWindow(QMainWindow):
         bar.setFixedHeight(4)
         bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         track = _HomeStatusTrack(st_lbl, bar, sw)
-        # Vertical center so fixed-height Jobs rows line up with duration (VCenter) and filename.
-        vl.addStretch(1)
-        vl.addWidget(track, 0)
-        vl.addStretch(1)
+        if top_anchor:
+            # Home: top-anchor so the status stays in line with Duration and
+            # Filename when the log panel expands a row; trailing stretch
+            # absorbs the extra height below.
+            vl.setAlignment(Qt.AlignmentFlag.AlignTop)
+            vl.addWidget(track, 0)
+            vl.addStretch(1)
+        else:
+            # Jobs: vertically center so fixed-height rows line up with
+            # duration (VCenter) and filename.
+            vl.addStretch(1)
+            vl.addWidget(track, 0)
+            vl.addStretch(1)
         sw._status_lbl = st_lbl  # type: ignore[attr-defined]
         sw._progress_bar = bar  # type: ignore[attr-defined]
         sw._status_track = track  # type: ignore[attr-defined]
@@ -2687,7 +2818,7 @@ class MainWindow(QMainWindow):
             return
 
         if kind == "write":
-            # _write_segments fires this after each output file. The
+            # Emitted after each output file (including segments JSON). The
             # stage=write event at 0.95 already moved the bar; suppress.
             return
 
@@ -2820,6 +2951,7 @@ class MainWindow(QMainWindow):
             "opened": "",
             "transcript_path": "",
             "translation_path": "",
+            "segments_path": "",
             "src_lang": "",
             "tgt_lang": "",
             # Back-compat for older code paths still reading these keys.
@@ -2833,6 +2965,7 @@ class MainWindow(QMainWindow):
         rec["output_folder"] = outputs.get("folder", "")
         rec["transcript_path"] = outputs.get("transcript_path", "")
         rec["translation_path"] = outputs.get("translation_path", "")
+        rec["segments_path"] = outputs.get("segments_path", "")
         rec["src_lang"] = outputs.get("src_lang", "")
         rec["tgt_lang"] = outputs.get("tgt_lang", "")
         rec["spanish_path"] = outputs.get("spanish_path", "")
@@ -2877,7 +3010,7 @@ class MainWindow(QMainWindow):
             self.jobs_table.setCellWidget(row, 1, self._build_jobs_filename_cell(rec.get("fname", "")))
 
             status_text = rec.get("status", "")
-            self.jobs_table.setCellWidget(row, 2, self._build_home_status_cell(status_text))
+            self.jobs_table.setCellWidget(row, 2, self._build_home_status_cell(status_text, top_anchor=False))
 
             path_key = fp if fp else (rec.get("fname") or "")
             self.jobs_table.setCellWidget(
@@ -2897,6 +3030,174 @@ class MainWindow(QMainWindow):
             return data
         except Exception as e:
             return f"[error] Could not read file:\n{path}\n\n{e}"
+
+    def _safe_read_text_lines(self, path: str, max_lines: int) -> tuple[str, int]:
+        """Read up to ``max_lines`` full lines for Review (keeps block index = segment index)."""
+        if not path:
+            return "", 0
+        lines: list[str] = []
+        truncated = False
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    if i >= max_lines:
+                        truncated = True
+                        break
+                    lines.append(line.rstrip("\n\r"))
+        except Exception as e:
+            return f"[error] Could not read file:\n{path}\n\n{e}", 0
+        body = "\n".join(lines)
+        n_real = len(lines)
+        if truncated:
+            body += "\n\n… (preview truncated) …"
+        return body, n_real
+
+    @staticmethod
+    def _load_review_segments_json(path: str) -> list[dict]:
+        if not path or not os.path.isfile(path):
+            return []
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                segs = data.get("segments")
+                if isinstance(segs, list):
+                    return [s for s in segs if isinstance(s, dict)]
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        return []
+
+    @staticmethod
+    def _parse_segment_timestamps_from_transcript_txt(path: str, max_lines: int) -> list[dict]:
+        """One entry per text line: real times if line matches segment export, else nulls."""
+        rows: list[dict] = []
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if i >= max_lines:
+                        break
+                    line = raw.rstrip("\n\r")
+                    m = _TRANSCRIPT_SEGMENT_LINE_RE.match(line)
+                    if not m:
+                        rows.append({"start": None, "end": None})
+                        continue
+                    sh, sm, ss, eh, em, es, _sp, _tx = m.groups()
+                    rows.append(
+                        {
+                            "start": _hms_to_seconds(sh, sm, ss),
+                            "end": _hms_to_seconds(eh, em, es),
+                        }
+                    )
+        except OSError:
+            return []
+        return rows
+
+    def _try_build_uniform_review_segments(self, tx_lines: int, dur_ms: int) -> None:
+        """Approximate timing when no JSON and no embedded segment timestamps (even line split)."""
+        if tx_lines <= 0 or dur_ms <= 0 or self._review_segments:
+            return
+        d = dur_ms / 1000.0
+        self._review_segments = [
+            {"start": (i / tx_lines) * d, "end": ((i + 1) / tx_lines) * d} for i in range(tx_lines)
+        ]
+
+    def _review_active_segment_index(self, t_sec: float) -> int | None:
+        """Pick segment for playback time: prefer start<=t<=end, else last segment with start<=t."""
+        segs = self._review_segments
+        if not segs:
+            return None
+        best: int | None = None
+        for i, seg in enumerate(segs):
+            st = seg.get("start")
+            if st is None:
+                continue
+            try:
+                stf = float(st)
+            except (TypeError, ValueError):
+                continue
+            en = seg.get("end")
+            try:
+                enf = float(en) if en is not None else None
+            except (TypeError, ValueError):
+                enf = None
+            if enf is not None and stf <= t_sec <= enf:
+                return i
+            if stf <= t_sec:
+                best = i
+        return best
+
+    def _review_active_char_format(self) -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        fmt.setProperty(QTextFormat.Property.FullWidthSelection, True)
+        if getattr(self, "_theme", THEME_LIGHT) == THEME_DARK:
+            fmt.setBackground(QColor(30, 64, 120))
+            fmt.setForeground(QColor(241, 245, 249))
+        else:
+            fmt.setBackground(QColor(191, 219, 254))
+            fmt.setForeground(QColor(15, 23, 42))
+        return fmt
+
+    def _review_extra_selection_for_block(
+        self, edit: QTextEdit, block_idx: int
+    ) -> QTextEdit.ExtraSelection | None:
+        doc = edit.document()
+        block = doc.findBlockByNumber(block_idx)
+        if not block.isValid():
+            return None
+        sel = QTextEdit.ExtraSelection()
+        # Select only this block's text (exclude the paragraph separator). Using
+        # BlockUnderCursor + FullWidthSelection often paints a band that bleeds
+        # vertically into the previous segment; a character range stays aligned
+        # with the laid-out lines (including word wrap).
+        cur = QTextCursor(doc)
+        start = block.position()
+        blen = block.length()
+        end = start + max(blen - 1, 0)
+        cur.setPosition(start)
+        cur.setPosition(end, QTextCursor.MoveMode.KeepAnchor)
+        sel.cursor = cur
+        sel.format = self._review_active_char_format()
+        return sel
+
+    def _apply_review_segment_highlight(self, seg_idx: int | None) -> None:
+        sync_n = self._review_sync_line_count
+        if seg_idx is not None and sync_n > 0 and seg_idx >= sync_n:
+            seg_idx = None
+        if seg_idx is not None and seg_idx == self._review_highlight_idx:
+            return
+        self._review_highlight_idx = seg_idx
+
+        editors: list[QTextEdit] = [self.spanish_preview]
+        if self._review_highlight_translation:
+            editors.append(self.english_preview)
+
+        for edit in editors:
+            if seg_idx is None or not self._review_segments:
+                edit.setExtraSelections([])
+                continue
+
+        if seg_idx is not None and self._review_segments:
+            for edit in editors:
+                block = edit.document().findBlockByNumber(seg_idx)
+                if not block.isValid():
+                    continue
+                edit.setTextCursor(QTextCursor(block))
+                edit.ensureCursorVisible()
+
+        for edit in editors:
+            if seg_idx is None or not self._review_segments:
+                continue
+            sel = self._review_extra_selection_for_block(edit, seg_idx)
+            edit.setExtraSelections([sel] if sel else [])
+
+    def _sync_review_highlight_from_time_ms(self, pos_ms: int) -> None:
+        if not self._review_segments:
+            if self._review_highlight_idx is not None:
+                self._apply_review_segment_highlight(None)
+            return
+        t = max(0.0, float(pos_ms) / 1000.0)
+        idx = self._review_active_segment_index(t)
+        self._apply_review_segment_highlight(idx)
 
     def _transcription_meta_path(self, out_dir: str, stem: str) -> str:
         return os.path.join(out_dir, f"{stem}{TRANSCRIPTION_META_SUFFIX}")
@@ -3064,6 +3365,11 @@ class MainWindow(QMainWindow):
             elif lang == "en":
                 english_path = p
 
+        segments_path = ""
+        engine_segments = (str(done.get("segments_file") or "")).strip()
+        if engine_segments and os.path.isfile(engine_segments):
+            segments_path = engine_segments
+
         # Sidecar meta so Review's filesystem-scan fallback can show the
         # original source filename as the row label and play back the
         # source audio. Only written when we actually archived something;
@@ -3087,6 +3393,7 @@ class MainWindow(QMainWindow):
             "folder": out_dir,
             "transcript_path": dst_transcript,
             "translation_path": dst_translation,
+            "segments_path": segments_path,
             "src_lang": src_lang or "",
             "tgt_lang": tgt_lang or "",
             "spanish_path": spanish_path,
@@ -3216,6 +3523,14 @@ class MainWindow(QMainWindow):
                 fname = stem or "—"
             if stem:
                 seen_stems.add(stem.casefold())
+            seg_p = (rec.get("segments_path") or "").strip()
+            if not seg_p and transcript_p:
+                cand = os.path.join(
+                    job_out,
+                    f"{self._strip_archive_suffix(transcript_p)}{REVIEW_SEGMENTS_SUFFIX}",
+                )
+                if os.path.isfile(cand):
+                    seg_p = cand
             items.append(
                 {
                     "label": fname,
@@ -3223,6 +3538,7 @@ class MainWindow(QMainWindow):
                     "audio_path": (rec.get("full_path") or "").strip(),
                     "transcript_path": transcript_p,
                     "translation_path": translation_p,
+                    "segments_path": seg_p,
                     "src_lang": rec.get("src_lang", ""),
                     "tgt_lang": rec.get("tgt_lang", ""),
                     # Back-compat keys.
@@ -3327,6 +3643,8 @@ class MainWindow(QMainWindow):
                     ap = str(meta.get("source_full_path") or "").strip()
                     if ap and not os.path.isfile(ap):
                         ap = ""
+                seg_sidecar = os.path.join(match_dir, f"{key}{REVIEW_SEGMENTS_SUFFIX}")
+                seg_p = seg_sidecar if os.path.isfile(seg_sidecar) else ""
                 items.append(
                     {
                         "label": self._review_display_name(match_dir, key),
@@ -3334,6 +3652,7 @@ class MainWindow(QMainWindow):
                         "audio_path": ap,
                         "transcript_path": g.get("transcript_path", ""),
                         "translation_path": g.get("translation_path", ""),
+                        "segments_path": seg_p,
                         "src_lang": g.get("src_lang", ""),
                         "tgt_lang": g.get("tgt_lang", ""),
                         "spanish_path": g.get("spanish_path", ""),
@@ -3371,7 +3690,14 @@ class MainWindow(QMainWindow):
         if not self._review_items:
             self.review_info_path.setText("Run a job to generate .txt files, then come back to Review.")
             self.spanish_preview.setPlainText("")
+            self.spanish_preview.setExtraSelections([])
             self.english_preview.setPlainText("")
+            self.english_preview.setExtraSelections([])
+            self._review_segments = []
+            self._review_sync_line_count = 0
+            self._review_highlight_idx = None
+            self._review_highlight_translation = False
+            self._review_fallback_tx_lines = 0
         else:
             self._on_review_selection_changed()
 
@@ -3390,8 +3716,15 @@ class MainWindow(QMainWindow):
                 self.review_info_path.setText("")
             if hasattr(self, "spanish_preview"):
                 self.spanish_preview.setPlainText("")
+                self.spanish_preview.setExtraSelections([])
             if hasattr(self, "english_preview"):
                 self.english_preview.setPlainText("")
+                self.english_preview.setExtraSelections([])
+            self._review_segments = []
+            self._review_sync_line_count = 0
+            self._review_highlight_idx = None
+            self._review_highlight_translation = False
+            self._review_fallback_tx_lines = 0
             return
 
         # Load audio for the selected Review item (if available).
@@ -3401,20 +3734,106 @@ class MainWindow(QMainWindow):
         folder = it.get("folder", "")
         transcript_p = (it.get("transcript_path") or it.get("spanish_path") or "").strip()
         translation_p = (it.get("translation_path") or it.get("english_path") or "").strip()
+        seg_path = (it.get("segments_path") or "").strip()
+        if not seg_path and transcript_p:
+            cand = os.path.join(
+                os.path.dirname(transcript_p),
+                f"{self._strip_archive_suffix(transcript_p)}{REVIEW_SEGMENTS_SUFFIX}",
+            )
+            if os.path.isfile(cand):
+                seg_path = cand
+        if not seg_path and ap and os.path.isfile(ap):
+            audio_stem = os.path.splitext(os.path.basename(ap))[0]
+            side_dir = ""
+            if transcript_p:
+                side_dir = os.path.dirname(transcript_p)
+            elif translation_p:
+                side_dir = os.path.dirname(translation_p)
+            elif folder:
+                side_dir = folder
+            if side_dir:
+                cand2 = os.path.join(side_dir, f"{audio_stem}{REVIEW_SEGMENTS_SUFFIX}")
+                if os.path.isfile(cand2):
+                    seg_path = cand2
+
+        self._review_segments = self._load_review_segments_json(seg_path)
+        self._review_fallback_tx_lines = 0
+        self._review_highlight_idx = None
+        self._review_highlight_translation = bool(translation_p and os.path.isfile(translation_p))
+
+        if transcript_p:
+            tx_body, tx_lines = self._safe_read_text_lines(transcript_p, REVIEW_PREVIEW_MAX_LINES)
+            self.spanish_preview.setPlainText(tx_body)
+        else:
+            self.spanish_preview.setPlainText("No transcription file found.")
+            tx_lines = 0
+
+        if translation_p and os.path.isfile(translation_p):
+            en_body, en_lines = self._safe_read_text_lines(translation_p, REVIEW_PREVIEW_MAX_LINES)
+            self.english_preview.setPlainText(en_body)
+        else:
+            self.english_preview.setPlainText("No translation file found.")
+            en_lines = 0
+
+        if not self._review_segments and transcript_p and tx_lines:
+            parsed = self._parse_segment_timestamps_from_transcript_txt(
+                transcript_p, REVIEW_PREVIEW_MAX_LINES
+            )
+            if (
+                len(parsed) == tx_lines
+                and parsed
+                and all(r.get("start") is not None and r.get("end") is not None for r in parsed)
+            ):
+                self._review_segments = parsed
+
+        n_seg = len(self._review_segments)
+        if n_seg and tx_lines:
+            if self._review_highlight_translation and en_lines:
+                self._review_sync_line_count = min(tx_lines, en_lines, n_seg)
+            else:
+                self._review_sync_line_count = min(tx_lines, n_seg)
+        elif tx_lines:
+            if self._review_highlight_translation and en_lines:
+                self._review_sync_line_count = min(tx_lines, en_lines)
+            else:
+                self._review_sync_line_count = tx_lines
+        else:
+            self._review_sync_line_count = 0
+
+        left_bc = self.spanish_preview.document().blockCount()
+        if self._review_highlight_translation and en_lines:
+            right_bc = self.english_preview.document().blockCount()
+            self._review_sync_line_count = min(self._review_sync_line_count, left_bc, right_bc)
+        elif self._review_sync_line_count:
+            self._review_sync_line_count = min(self._review_sync_line_count, left_bc)
+
+        if not self._review_segments and tx_lines > 0:
+            self._review_fallback_tx_lines = tx_lines
+            if self._review_player is not None and int(self._review_player.duration()) > 0:
+                self._try_build_uniform_review_segments(tx_lines, int(self._review_player.duration()))
+                if self._review_segments:
+                    self._review_fallback_tx_lines = 0
+                    n2 = len(self._review_segments)
+                    if self._review_highlight_translation and en_lines:
+                        right_bc = self.english_preview.document().blockCount()
+                        self._review_sync_line_count = min(
+                            self._review_sync_line_count, n2, left_bc, right_bc
+                        )
+                    else:
+                        self._review_sync_line_count = min(self._review_sync_line_count, n2, left_bc)
 
         info_lines = [f"Folder: {folder}"]
-        # Surface a missing source-audio path so the disabled play/seek
-        # controls have a visible explanation instead of looking broken.
         if ap and not os.path.isfile(ap):
             info_lines.append(f"Source audio not found at: {ap}")
         self.review_info_path.setText("\n".join(info_lines))
 
-        self.spanish_preview.setPlainText(
-            self._safe_read_text(transcript_p) if transcript_p else "No transcription file found."
-        )
-        self.english_preview.setPlainText(
-            self._safe_read_text(translation_p) if translation_p else "No translation file found."
-        )
+        self.spanish_preview.setExtraSelections([])
+        self.english_preview.setExtraSelections([])
+
+        if self._review_player is not None:
+            self._sync_review_highlight_from_time_ms(int(self._review_player.position()))
+        else:
+            self._apply_review_segment_highlight(None)
 
     def _open_review_folder(self):
         it = self._selected_review_item()

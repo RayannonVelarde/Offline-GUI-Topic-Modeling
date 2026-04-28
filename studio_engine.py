@@ -22,6 +22,7 @@ GUI rename logic in _archive_latest_outputs_for_job finds them):
 
     transcription_<src_iso>.txt   (always; e.g. transcription_es.txt)
     translation_<tgt_iso>.txt     (only when --translate != none; e.g. translation_en.txt)
+    <audio_stem>_segments.json    (always; segment timing + text for Review / tooling)
 
 stdout:
     Free-text `[engine] …` log lines for the GUI's log panel.
@@ -733,6 +734,74 @@ def stage_write_transcript(
     )
 
 
+def _segment_time_seconds(value) -> Optional[float]:
+    """Coerce alignment/Whisper time to float seconds, or None if unusable."""
+    if value is None:
+        return None
+    try:
+        s = float(value)
+    except (TypeError, ValueError):
+        return None
+    if s != s or s < 0:  # NaN or negative
+        return None
+    return s
+
+
+def stage_write_review_segments(
+    result_source,
+    result_translation,
+    path: Path,
+    log: Logger,
+    src_iso: str,
+    tgt_iso: Optional[str],
+) -> None:
+    """Write merged segment JSON for Review sync (timing independent of --timestamps)."""
+    log(f"Saving review segments sidecar to {path}...")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    src_segments = result_source.get("segments") or []
+    tgt_segments = (
+        (result_translation or {}).get("segments") or []
+        if result_translation is not None
+        else []
+    )
+
+    rows = []
+    for i, seg in enumerate(src_segments):
+        speaker = seg.get("speaker") or "Unknown"
+        text = (seg.get("text") or "").strip()
+        trans_text: Optional[str] = None
+        if i < len(tgt_segments):
+            trans_text = (tgt_segments[i].get("text") or "").strip() or None
+
+        rows.append(
+            {
+                "start": _segment_time_seconds(seg.get("start")),
+                "end": _segment_time_seconds(seg.get("end")),
+                "speaker": str(speaker),
+                "text": text,
+                "translation": trans_text,
+            }
+        )
+
+    payload = {
+        "version": 1,
+        "src_lang": src_iso,
+        "tgt_lang": tgt_iso,
+        "segments": rows,
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    _emit_event(
+        "write",
+        label="segments_json",
+        path=str(path),
+        lines=len(rows),
+        timestamps="internal",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Orchestration
 # --------------------------------------------------------------------------- #
@@ -905,6 +974,16 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
             config.timestamps,
         )
 
+    review_segments_path = config.output_dir / f"{config.audio_path.stem}_segments.json"
+    stage_write_review_segments(
+        result_source,
+        result_translation,
+        review_segments_path,
+        log,
+        src_iso,
+        effective_tgt,
+    )
+
     elapsed = time.time() - start
     log(f"Done. Total execution time: {elapsed:.2f} seconds.")
     _emit_event(
@@ -914,6 +993,7 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
         tgt_lang=tgt_iso if result_translation is not None else None,
         transcript_file=str(transcript_path),
         translation_file=str(translation_path) if translation_path is not None else None,
+        segments_file=str(review_segments_path),
     )
 
 
