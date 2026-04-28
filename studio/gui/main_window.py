@@ -85,12 +85,12 @@ def _resolve_engine_python():
     surface a meaningful error instead of QProcess's opaque
     "execve: No such file or directory" message.
     """
-    if os.name == "nt":
-        candidate = os.path.join(SCRIPT_DIR, ".venv", "Scripts", "python.exe")
-    else:
-        candidate = os.path.join(SCRIPT_DIR, ".venv", "bin", "python")
-    if os.path.isfile(candidate):
-        return candidate
+    bin_name = "Scripts\\python.exe" if os.name == "nt" else "bin/python"
+    # Check studio/ dir first, then repo root (one level up) for .venv.
+    for base in (SCRIPT_DIR, os.path.dirname(SCRIPT_DIR)):
+        candidate = os.path.join(base, ".venv", bin_name)
+        if os.path.isfile(candidate):
+            return candidate
     return sys.executable
 
 SETTINGS_ORG = "OfflineGUI"
@@ -399,10 +399,10 @@ class JobOptionsDialog(QDialog):
         self.advanced_toggle_btn.setToolButtonStyle(
             Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
-        self.advanced_toggle_btn.setIconSize(QSize(14, 14))
+        self.advanced_toggle_btn.setIconSize(QSize(18, 18))
         self.advanced_toggle_btn.setIcon(
             make_disclosure_chevron_icon(
-                expanded=False, size=14, color_hex=chev_col
+                expanded=False, size=18, color_hex=chev_col
             )
         )
         self.advanced_toggle_btn.toggled.connect(self._on_advanced_toggled)
@@ -526,7 +526,7 @@ class JobOptionsDialog(QDialog):
         chev.setAutoRaise(True)
         chev.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         chev.setFixedSize(24, 24)
-        icon_sz = 14
+        icon_sz = 18
         chev.setIcon(make_disclosure_chevron_icon(expanded=True, size=icon_sz, color_hex=chev_color))
         chev.setIconSize(QSize(icon_sz, icon_sz))
 
@@ -564,7 +564,7 @@ class JobOptionsDialog(QDialog):
         self.advanced_toggle_btn.setIcon(
             make_disclosure_chevron_icon(
                 expanded=bool(checked),
-                size=14,
+                size=18,
                 color_hex=self._advanced_chev_color,
             )
         )
@@ -836,7 +836,7 @@ class MainWindow(QMainWindow):
     def _refresh_settings_disclosure_icons(self) -> None:
         """Update Settings chevron icons when theme changes."""
         col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
         for attr in (
             "default_source_language_chevron_btn",
             "default_output_mode_chevron_btn",
@@ -856,7 +856,7 @@ class MainWindow(QMainWindow):
             return
         inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
         active = "#ffffff"
-        icon_sz = 18
+        icon_sz = 22
         for pid, btn in self._nav_buttons.items():
             color = active if pid == self._current_page else inactive
             btn.setIcon(make_nav_icon(pid, size=icon_sz, color_hex=color))
@@ -867,7 +867,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table"):
             return
         inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
         for r in range(self.table.rowCount()):
             w = self.table.cellWidget(r, 3)
             if w is None:
@@ -883,7 +883,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "jobs_table"):
             return
         inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
         for r in range(self.jobs_table.rowCount()):
             w = self.jobs_table.cellWidget(r, 3)
             if w is None:
@@ -897,7 +897,7 @@ class MainWindow(QMainWindow):
     def _refresh_review_page_action_icons(self) -> None:
         """Review header actions: folder + open-file icons (same stroke family as Home/Jobs)."""
         inactive = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
         sz = QSize(icon_sz, icon_sz)
         folder_btn = getattr(self, "review_open_folder_btn", None)
         if folder_btn is not None:
@@ -914,7 +914,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table"):
             return
         col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
         for r in range(self.table.rowCount()):
             w = self.table.cellWidget(r, 3)
             if w is None:
@@ -930,7 +930,7 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table"):
             return
         col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
         for r in range(self.table.rowCount()):
             w = self.table.cellWidget(r, 3)
             if w is None:
@@ -1202,9 +1202,9 @@ class MainWindow(QMainWindow):
         self.review_open_folder_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         self.review_open_folder_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.review_open_folder_btn.setIcon(
-            make_folder_open_icon(size=14, color_hex=_review_folder_muted)
+            make_folder_open_icon(size=18, color_hex=_review_folder_muted)
         )
-        self.review_open_folder_btn.setIconSize(QSize(14, 14))
+        self.review_open_folder_btn.setIconSize(QSize(18, 18))
         self.review_open_folder_btn.setFixedSize(22, 22)
         self.review_open_folder_btn.setToolTip("Open containing folder")
         self.review_open_folder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1237,7 +1237,7 @@ class MainWindow(QMainWindow):
         self.review_play_btn.setText("Play")
         self.review_play_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.review_play_btn.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaPlay))
-        self.review_play_btn.setIconSize(QSize(16, 16))
+        self.review_play_btn.setIconSize(QSize(20, 20))
         self.review_play_btn.setFixedHeight(32)
         self.review_play_btn.setMinimumWidth(88)
         self.review_play_btn.setEnabled(False)
@@ -1283,8 +1283,8 @@ class MainWindow(QMainWindow):
         self.review_sync_btn = QToolButton()
         self.review_sync_btn.setObjectName("review-sync-btn")
         self.review_sync_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.review_sync_btn.setIcon(make_highlighter_icon(size=14, color_hex=_sync_active_col))
-        self.review_sync_btn.setIconSize(QSize(14, 14))
+        self.review_sync_btn.setIcon(make_highlighter_icon(size=18, color_hex=_sync_active_col))
+        self.review_sync_btn.setIconSize(QSize(18, 18))
         self.review_sync_btn.setToolTip("Highlight text as audio plays")
         self.review_sync_btn.setCheckable(True)
         self.review_sync_btn.setChecked(True)
@@ -1296,7 +1296,7 @@ class MainWindow(QMainWindow):
             self._review_highlight_enabled = checked
             self.review_sync_btn.setIcon(
                 make_highlighter_icon(
-                    size=14, color_hex=_sync_active_col if checked else _sync_muted_col
+                    size=18, color_hex=_sync_active_col if checked else _sync_muted_col
                 )
             )
             if not checked:
@@ -1339,9 +1339,9 @@ class MainWindow(QMainWindow):
         self.review_open_transcript_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         self.review_open_transcript_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.review_open_transcript_btn.setIcon(
-            make_open_external_icon(size=14, color_hex=_review_file_muted)
+            make_open_external_icon(size=18, color_hex=_review_file_muted)
         )
-        self.review_open_transcript_btn.setIconSize(QSize(14, 14))
+        self.review_open_transcript_btn.setIconSize(QSize(18, 18))
         self.review_open_transcript_btn.setFixedSize(22, 22)
         self.review_open_transcript_btn.setToolTip("Open transcription file")
         self.review_open_transcript_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1353,8 +1353,8 @@ class MainWindow(QMainWindow):
         self.review_edit_transcript_btn.setObjectName("review-edit-transcript-btn")
         self.review_edit_transcript_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         self.review_edit_transcript_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.review_edit_transcript_btn.setIcon(make_pencil_icon(size=14, color_hex=_review_file_muted))
-        self.review_edit_transcript_btn.setIconSize(QSize(14, 14))
+        self.review_edit_transcript_btn.setIcon(make_pencil_icon(size=18, color_hex=_review_file_muted))
+        self.review_edit_transcript_btn.setIconSize(QSize(18, 18))
         self.review_edit_transcript_btn.setFixedSize(22, 22)
         self.review_edit_transcript_btn.setToolTip("Edit transcription")
         self.review_edit_transcript_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1363,7 +1363,7 @@ class MainWindow(QMainWindow):
 
         def _on_transcript_edit_toggled(checked: bool) -> None:
             self.review_edit_transcript_btn.setIcon(
-                make_pencil_icon(size=14, color_hex=_sync_active_col if checked else _review_file_muted)
+                make_pencil_icon(size=18, color_hex=_sync_active_col if checked else _review_file_muted)
             )
             if checked:
                 self.spanish_preview.setReadOnly(False)
@@ -1404,9 +1404,9 @@ class MainWindow(QMainWindow):
         self.review_open_translation_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         self.review_open_translation_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.review_open_translation_btn.setIcon(
-            make_open_external_icon(size=14, color_hex=_review_file_muted)
+            make_open_external_icon(size=18, color_hex=_review_file_muted)
         )
-        self.review_open_translation_btn.setIconSize(QSize(14, 14))
+        self.review_open_translation_btn.setIconSize(QSize(18, 18))
         self.review_open_translation_btn.setFixedSize(22, 22)
         self.review_open_translation_btn.setToolTip("Open translation file")
         self.review_open_translation_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1418,8 +1418,8 @@ class MainWindow(QMainWindow):
         self.review_edit_translation_btn.setObjectName("review-edit-translation-btn")
         self.review_edit_translation_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         self.review_edit_translation_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.review_edit_translation_btn.setIcon(make_pencil_icon(size=14, color_hex=_review_file_muted))
-        self.review_edit_translation_btn.setIconSize(QSize(14, 14))
+        self.review_edit_translation_btn.setIcon(make_pencil_icon(size=18, color_hex=_review_file_muted))
+        self.review_edit_translation_btn.setIconSize(QSize(18, 18))
         self.review_edit_translation_btn.setFixedSize(22, 22)
         self.review_edit_translation_btn.setToolTip("Edit translation")
         self.review_edit_translation_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -1428,7 +1428,7 @@ class MainWindow(QMainWindow):
 
         def _on_translation_edit_toggled(checked: bool) -> None:
             self.review_edit_translation_btn.setIcon(
-                make_pencil_icon(size=14, color_hex=_sync_active_col if checked else _review_file_muted)
+                make_pencil_icon(size=18, color_hex=_sync_active_col if checked else _review_file_muted)
             )
             if checked:
                 self.english_preview.setReadOnly(False)
@@ -1709,7 +1709,7 @@ class MainWindow(QMainWindow):
         # below keeps their construction in one place so layout stays
         # consistent and the diff stays small.
         col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        icon_sz = 14
+        icon_sz = 18
 
         def _make_settings_chevron_dropdown(
             options: list[str],
@@ -2199,8 +2199,8 @@ class MainWindow(QMainWindow):
         log_edit.setVisible(expanded)
         if expand_btn is not None:
             col = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-            expand_btn.setIcon(make_log_output_icon(size=14, color_hex=col))
-            expand_btn.setIconSize(QSize(14, 14))
+            expand_btn.setIcon(make_log_output_icon(size=18, color_hex=col))
+            expand_btn.setIconSize(QSize(18, 18))
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
 
@@ -2425,8 +2425,8 @@ class MainWindow(QMainWindow):
         btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         _folder_muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        btn.setIcon(make_folder_open_icon(size=14, color_hex=_folder_muted))
-        btn.setIconSize(QSize(14, 14))
+        btn.setIcon(make_folder_open_icon(size=18, color_hex=_folder_muted))
+        btn.setIconSize(QSize(18, 18))
         btn.setFixedSize(22, 22)
         btn.setToolTip("Open output folder")
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -2455,8 +2455,8 @@ class MainWindow(QMainWindow):
         btn.setObjectName("home-row-open-btn")
         btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        btn.setIcon(make_folder_open_icon(size=14, color_hex=_muted))
-        btn.setIconSize(QSize(14, 14))
+        btn.setIcon(make_folder_open_icon(size=18, color_hex=_muted))
+        btn.setIconSize(QSize(18, 18))
         btn.setFixedSize(22, 22)
         btn.setToolTip("Open output folder")
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -2469,8 +2469,8 @@ class MainWindow(QMainWindow):
         log_btn.setCheckable(True)
         log_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         log_btn.setText("")
-        log_btn.setIcon(make_log_output_icon(size=14, color_hex=_muted))
-        log_btn.setIconSize(QSize(14, 14))
+        log_btn.setIcon(make_log_output_icon(size=18, color_hex=_muted))
+        log_btn.setIconSize(QSize(18, 18))
         log_btn.setFixedSize(22, 22)
         log_btn.setToolTip("Show or hide log for this file")
         log_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -2482,8 +2482,8 @@ class MainWindow(QMainWindow):
         remove_btn.setObjectName("home-row-remove-btn")
         remove_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         remove_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        remove_btn.setIcon(make_remove_icon(size=14, color_hex=_muted))
-        remove_btn.setIconSize(QSize(14, 14))
+        remove_btn.setIcon(make_remove_icon(size=18, color_hex=_muted))
+        remove_btn.setIconSize(QSize(18, 18))
         remove_btn.setFixedSize(22, 22)
         remove_btn.setToolTip("Remove from list")
         remove_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
