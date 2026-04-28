@@ -1,7 +1,7 @@
 """
 studio_engine.py — Studio backend engine (Step C).
 
-Subprocess contract (called by gui/main_window.py):
+Subprocess contract (called by studio/gui/main_window.py):
 
     python studio_engine.py <audio_path>
         --num-speakers N   (clamped to 1..MAX_DIARIZATION_SPEAKERS, currently 8)

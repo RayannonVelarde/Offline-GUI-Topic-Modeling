@@ -117,37 +117,37 @@ def make_nav_icon(page_id: str, *, size: int = 18, color_hex: str = "#475569") -
     return _render_stroke_icon(page_id, size=size, color_hex=color_hex)
 
 
-def make_folder_open_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_folder_open_icon(*, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Stroke folder-open icon matching nav icon family (for Home table action column)."""
     return _render_stroke_icon("folder_open", size=size, color_hex=color_hex)
 
 
-def make_disclosure_chevron_icon(*, expanded: bool, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_disclosure_chevron_icon(*, expanded: bool, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Right = collapsed, down = expanded (same stroke family as nav icons)."""
     key = "chevron_down" if expanded else "chevron_right"
     return _render_stroke_icon(key, size=size, color_hex=color_hex)
 
 
-def make_log_output_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_log_output_icon(*, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Document-with-lines icon for inline job log show/hide (Home filename row)."""
     return _render_stroke_icon("log_output", size=size, color_hex=color_hex)
 
 
-def make_open_external_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_open_external_icon(*, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Window-with-arrow-out icon: open file in default application (Review headers)."""
     return _render_stroke_icon("open_external", size=size, color_hex=color_hex)
 
 
-def make_remove_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_remove_icon(*, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Minimal X icon for the Home row 'Remove from list' action."""
     return _render_stroke_icon("x_close", size=size, color_hex=color_hex)
 
 
-def make_pencil_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_pencil_icon(*, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Pencil/edit icon for the Review page per-panel edit toggle."""
     return _render_stroke_icon("pencil", size=size, color_hex=color_hex)
 
 
-def make_highlighter_icon(*, size: int = 14, color_hex: str = "#475569") -> QIcon:
+def make_highlighter_icon(*, size: int = 18, color_hex: str = "#475569") -> QIcon:
     """Marker/highlighter icon for the Review page sync-highlight toggle."""
     return _render_stroke_icon("highlighter", size=size, color_hex=color_hex)

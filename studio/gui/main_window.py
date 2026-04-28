@@ -1535,7 +1535,8 @@ class MainWindow(QMainWindow):
                     self._review_sync_line_count = min(
                         self._review_sync_line_count, left_bc, len(self._review_segments)
                     )
-                self._sync_review_highlight_from_time_ms(pos)
+                if self._review_highlight_enabled:
+                    self._sync_review_highlight_from_time_ms(pos)
 
     def _on_review_media_position(self, pos_ms: int):
         if not self.review_seek.isDragging():
@@ -1949,7 +1950,8 @@ class MainWindow(QMainWindow):
         hf_note = QLabel("Stored securely in your OS keychain.")
         hf_note.setObjectName("settings-hint")
 
-        hf_link = QLabel('<a href="https://huggingface.co/settings/tokens" style="color:#4ea1f3;">Get a Hugging Face token</a>')
+        hf_link_color = "#4ea1f3" if getattr(self, "_theme", THEME_DARK) == THEME_DARK else "#2563eb"
+        hf_link = QLabel(f'<a href="https://huggingface.co/settings/tokens" style="color:{hf_link_color};">Get a Hugging Face token</a>')
         hf_link.setObjectName("settings-hint")
         hf_link.setOpenExternalLinks(True)
 
@@ -3251,7 +3253,7 @@ class MainWindow(QMainWindow):
                 return i
             if stf <= t_sec:
                 best = i
-        return best if best is not None else (0 if segs else None)
+        return best if best is not None else 0
 
     def _review_active_char_format(self) -> QTextCharFormat:
         fmt = QTextCharFormat()
@@ -3298,24 +3300,19 @@ class MainWindow(QMainWindow):
         if self._review_highlight_translation:
             editors.append(self.english_preview)
 
-        for edit in editors:
-            if seg_idx is None or not self._review_segments:
+        if seg_idx is None or not self._review_segments:
+            for edit in editors:
                 edit.setExtraSelections([])
-                continue
-
-        if seg_idx is not None and self._review_segments:
+        else:
             for edit in editors:
                 block = edit.document().findBlockByNumber(seg_idx)
                 if not block.isValid():
                     continue
                 edit.setTextCursor(QTextCursor(block))
                 edit.ensureCursorVisible()
-
-        for edit in editors:
-            if seg_idx is None or not self._review_segments:
-                continue
-            sel = self._review_extra_selection_for_block(edit, seg_idx)
-            edit.setExtraSelections([sel] if sel else [])
+            for edit in editors:
+                sel = self._review_extra_selection_for_block(edit, seg_idx)
+                edit.setExtraSelections([sel] if sel else [])
 
     def _sync_review_highlight_from_time_ms(self, pos_ms: int) -> None:
         if not self._review_segments:
@@ -3963,7 +3960,7 @@ class MainWindow(QMainWindow):
         self.spanish_preview.setExtraSelections([])
         self.english_preview.setExtraSelections([])
 
-        if self._review_player is not None:
+        if self._review_highlight_enabled and self._review_player is not None:
             self._sync_review_highlight_from_time_ms(int(self._review_player.position()))
         else:
             self._apply_review_segment_highlight(None)
