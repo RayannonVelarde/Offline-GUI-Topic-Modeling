@@ -497,7 +497,7 @@ class JobOptionsDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setObjectName("add-btn")
         cancel_btn.clicked.connect(self.reject)
-        ok_btn = QPushButton("OK")
+        ok_btn = QPushButton("Confirm")
         ok_btn.setObjectName("start-btn")
         ok_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         ok_btn.setDefault(True)
@@ -1099,6 +1099,7 @@ class MainWindow(QMainWindow):
         start_btn.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         start_btn.setFixedWidth(130)
         start_btn.clicked.connect(self.open_job_options)
+        start_btn.setEnabled(False)
         layout.addWidget(start_btn, alignment=Qt.AlignmentFlag.AlignRight)
         layout.addStretch()
 
@@ -1150,9 +1151,16 @@ class MainWindow(QMainWindow):
         hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
         hdr.setDefaultAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter)
         card_layout.addWidget(self.jobs_table)
+        self._jobs_empty_label = QLabel("No jobs yet\nGo to Home to add audio files")
+        self._jobs_empty_label.setObjectName("page-sub")
+        self._jobs_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._jobs_empty_label.setMinimumHeight(200)
+        card_layout.addWidget(self._jobs_empty_label)
+        self._jobs_recent_section = section
 
         layout.addWidget(card)
         layout.addStretch()
+        self._sync_jobs_empty_state()
         return page
 
     def _build_review_page(self) -> QFrame:
@@ -2243,6 +2251,8 @@ class MainWindow(QMainWindow):
             return
 
         self.table.removeRow(target_row)
+        if hasattr(self, "_home_start_btn"):
+            self._home_start_btn.setEnabled(self.table.rowCount() > 0)
 
         # Removing a row above the active job shifts the active row index
         # down by one; keep _current_job_row / _estimated_progress_row
@@ -2535,6 +2545,8 @@ class MainWindow(QMainWindow):
     def _append_table_row(self, fname: str, duration: str, status: str, full_path: str | None = None):
         row = self.table.rowCount()
         self.table.insertRow(row)
+        if hasattr(self, "_home_start_btn"):
+            self._home_start_btn.setEnabled(True)
         path_key = full_path.strip() if full_path else fname
 
         dur_item = QTableWidgetItem(duration)
@@ -3097,6 +3109,15 @@ class MainWindow(QMainWindow):
             )
 
             self.jobs_table.setRowHeight(row, HOME_TABLE_ROW_MIN_H)
+        self._sync_jobs_empty_state()
+
+    def _sync_jobs_empty_state(self) -> None:
+        if not hasattr(self, "jobs_table"):
+            return
+        empty = self.jobs_table.rowCount() == 0
+        self.jobs_table.setVisible(not empty)
+        self._jobs_empty_label.setVisible(empty)
+        self._jobs_recent_section.setVisible(not empty)
 
     def _safe_read_text(self, path: str, limit_chars: int = 20000) -> str:
         try:

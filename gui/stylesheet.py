@@ -469,6 +469,11 @@ QPushButton#start-btn:hover {
 QPushButton#start-btn:pressed {
     background-color: #1d4ed8;
 }
+QPushButton#start-btn:disabled {
+    background-color: #334155;
+    color: #64748b;
+    border: none;
+}
 
 #section-title {
     font-size: 13px;
@@ -991,6 +996,11 @@ QPushButton#start-btn:hover {
 }
 QPushButton#start-btn:pressed {
     background-color: #1d4ed8;
+}
+QPushButton#start-btn:disabled {
+    background-color: #334155;
+    color: #64748b;
+    border: none;
 }
 
 #section-title {
