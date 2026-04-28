@@ -1,4 +1,4 @@
-# Studio
+# Speech to Text Studio
 
 ## Overview
 
@@ -17,9 +17,17 @@ studio/
     └── nav_icons.py   # Navigation icons
 ```
 
-## Requirements
+## Setup
 
+Create and activate a virtual environment, then install dependencies:
 
+```bash
+python3 -m venv venv
+source venv/bin/activate           # macOS / Linux
+# .\venv\Scripts\activate          # Windows
+
+pip install -r requirements.txt
+```
 
 ## Usage
 
