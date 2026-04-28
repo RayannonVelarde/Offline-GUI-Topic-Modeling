@@ -1945,7 +1945,20 @@ class MainWindow(QMainWindow):
 
         hf_note = QLabel("Stored securely in your OS keychain.")
         hf_note.setObjectName("settings-hint")
-        integration_form.addRow(_make_label(""), hf_note)
+
+        hf_link = QLabel('<a href="https://huggingface.co/settings/tokens" style="color:#4ea1f3;">Get a Hugging Face token</a>')
+        hf_link.setObjectName("settings-hint")
+        hf_link.setOpenExternalLinks(True)
+
+        hf_hint_row = QWidget()
+        hf_hint_layout = QHBoxLayout(hf_hint_row)
+        hf_hint_layout.setContentsMargins(0, 0, 0, 0)
+        hf_hint_layout.setSpacing(12)
+        hf_hint_layout.addWidget(hf_note)
+        hf_hint_layout.addWidget(hf_link)
+        hf_hint_layout.addStretch()
+
+        integration_form.addRow(_make_label(""), hf_hint_row)
 
         integration_layout.addWidget(integration_body)
         layout.addWidget(integration_card)
