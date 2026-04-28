@@ -255,6 +255,10 @@ OUTPUT_MODE_DEFAULT = "Original + translation"
 
 TIMESTAMP_MODE_OPTIONS: list[str] = ["No timestamps", "Per segment", "Per word"]
 
+# Job Options: must match studio_engine.MAX_DIARIZATION_SPEAKERS (pyannote max).
+MAX_JOB_NUM_SPEAKERS = 8
+JOB_NUM_SPEAKERS_OPTIONS: list[str] = [str(i) for i in range(1, MAX_JOB_NUM_SPEAKERS + 1)]
+
 # Phase 2 advanced settings. Options match studio_engine.py's CLI choices.
 # MODEL_DEFAULT stays "small" to preserve the legacy latency/VRAM profile;
 # users can bump to large-v3 via the Advanced block for higher quality.
@@ -340,25 +344,14 @@ class JobOptionsDialog(QDialog):
 
         spk_lbl = QLabel("Number of speakers:")
         spk_lbl.setObjectName("settings-label")
-        self.speaker_count_spin = QSpinBox()
-        self.speaker_count_spin.setObjectName("settings-input")
-        self.speaker_count_spin.setRange(1, 32)
-        self.speaker_count_spin.setValue(2)
-        self.speaker_count_spin.setFixedWidth(220)
-        self.speaker_count_spin.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred
-        )
+        (
+            self.speaker_count_field,
+            self.speaker_count_value_label,
+            _,
+        ) = self._make_chevron_dropdown(JOB_NUM_SPEAKERS_OPTIONS, "2", chev_col)
 
-        spk_row = QWidget()
-        spk_lay = QHBoxLayout(spk_row)
-        spk_lay.setContentsMargins(0, 0, 0, 0)
-        spk_lay.setSpacing(10)
-        spk_lay.addWidget(spk_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        spk_lay.addStretch(1)
-        spk_lay.addWidget(self.speaker_count_spin, 0, Qt.AlignmentFlag.AlignVCenter)
-
-        self.diarization_checkbox.toggled.connect(self._sync_speaker_spin_enabled)
-        self._sync_speaker_spin_enabled()
+        self.diarization_checkbox.toggled.connect(self._sync_speaker_count_enabled)
+        self._sync_speaker_count_enabled()
 
         src_lang_lbl = QLabel("Source language:")
         src_lang_lbl.setObjectName("settings-label")
@@ -480,7 +473,8 @@ class JobOptionsDialog(QDialog):
         self.advanced_container.setVisible(False)
 
         outer.addWidget(self.diarization_checkbox)
-        outer.addWidget(spk_row)
+        outer.addWidget(spk_lbl)
+        outer.addWidget(self.speaker_count_field)
         outer.addWidget(src_lang_lbl)
         outer.addWidget(self.source_language_field)
         outer.addWidget(output_mode_lbl)
@@ -557,8 +551,8 @@ class JobOptionsDialog(QDialog):
         lay.addWidget(chev, 0, Qt.AlignmentFlag.AlignRight)
         return field, val, menu
 
-    def _sync_speaker_spin_enabled(self):
-        self.speaker_count_spin.setEnabled(self.diarization_checkbox.isChecked())
+    def _sync_speaker_count_enabled(self):
+        self.speaker_count_field.setEnabled(self.diarization_checkbox.isChecked())
 
     def _on_advanced_toggled(self, checked: bool) -> None:
         """Show/hide the Advanced settings block and flip the chevron icon.
@@ -975,10 +969,16 @@ class MainWindow(QMainWindow):
         logo = QLabel("Speech to Text Studio")
         logo.setObjectName("sidebar-logo")
         logo.setWordWrap(True)
+        logo.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        logo.setIndent(0)
+        logo.setContentsMargins(0, 0, 0, 0)
         logo.setAutoFillBackground(False)
         logo.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         sub = QLabel("Offline Tool")
         sub.setObjectName("sidebar-sub")
+        sub.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        sub.setIndent(0)
+        sub.setContentsMargins(0, 0, 0, 0)
         sub.setAutoFillBackground(False)
         sub.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         layout.addWidget(logo)
@@ -1675,9 +1675,15 @@ class MainWindow(QMainWindow):
 
         self.default_speaker_spin = QSpinBox()
         self.default_speaker_spin.setObjectName("settings-input")
-        self.default_speaker_spin.setRange(1, 32)
+        self.default_speaker_spin.setRange(1, MAX_JOB_NUM_SPEAKERS)
         self.default_speaker_spin.setValue(
-            max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
+            max(
+                1,
+                min(
+                    MAX_JOB_NUM_SPEAKERS,
+                    int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int)),
+                ),
+            )
         )
         self.default_speaker_spin.setFixedWidth(_SETTINGS_FIELD_MIN_W)
         self.default_speaker_spin.setSizePolicy(
@@ -2638,10 +2644,12 @@ class MainWindow(QMainWindow):
         dialog = JobOptionsDialog(self)
         # Apply saved defaults to the dialog.
         dialog.diarization_checkbox.setChecked(bool(self._settings().value(KEY_DEFAULT_DIARIZATION, True, type=bool)))
-        dialog.speaker_count_spin.setValue(
-            max(1, min(32, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))))
+        _nspk = max(
+            1,
+            min(MAX_JOB_NUM_SPEAKERS, int(self._settings().value(KEY_DEFAULT_NUM_SPEAKERS, 2, type=int))),
         )
-        dialog._sync_speaker_spin_enabled()
+        dialog.speaker_count_value_label.setText(str(_nspk))
+        dialog._sync_speaker_count_enabled()
         src_lang_default = str(self._settings().value(KEY_DEFAULT_TRANSLATION, "Auto"))
         if src_lang_default not in SOURCE_LANGUAGE_OPTIONS:
             src_lang_default = "Auto"
@@ -2697,7 +2705,11 @@ class MainWindow(QMainWindow):
         path_key = full_path
 
         diarize = dialog.diarization_checkbox.isChecked()
-        num_speakers = dialog.speaker_count_spin.value()
+        try:
+            num_speakers = int(dialog.speaker_count_value_label.text())
+        except ValueError:
+            num_speakers = 2
+        num_speakers = max(1, min(MAX_JOB_NUM_SPEAKERS, num_speakers))
         source_language_label = dialog.source_language_value_label.text()
         output_mode_label = dialog.output_mode_value_label.text()
         timestamps = dialog.timestamps_value_label.text()
@@ -2725,6 +2737,7 @@ class MainWindow(QMainWindow):
         s.setValue(KEY_DEFAULT_INITIAL_PROMPT, initial_prompt)
         s.setValue(KEY_DEFAULT_PREPROCESS, preprocess_label)
         s.setValue(KEY_DEFAULT_SPLIT_ON_SPEAKER, bool(split_on_speaker))
+        s.setValue(KEY_DEFAULT_NUM_SPEAKERS, int(num_speakers))
 
         # Require a Hugging Face token for jobs that need it.
         token = self._get_hf_token()

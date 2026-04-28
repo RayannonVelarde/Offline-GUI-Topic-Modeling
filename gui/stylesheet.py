@@ -26,20 +26,32 @@ QMainWindow, QWidget {
 }
 
 #sidebar-logo {
-    font-size: 17px;
-    font-weight: 700;
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    word-spacing: -5px;
     color: #0f172a;
-    padding: 4px 0px;
-    line-height: 1.25;
+    padding: 4px 0px 2px 0px;
+    margin: 0px;
+    line-height: 1.22;
     background-color: transparent;
     border: none;
     border-radius: 0px;
 }
 
 #sidebar-sub {
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
     font-size: 12px;
+    font-weight: 500;
+    letter-spacing: -0.035em;
+    word-spacing: -1px;
     color: #64748b;
     padding: 0px;
+    margin: 0px;
+    margin-left: 5px;
     background-color: transparent;
     border: none;
     border-radius: 0px;
@@ -258,8 +270,11 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 }
 
 #page-title {
-    font-size: 24px;
-    font-weight: 700;
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
     color: #0f172a;
 }
 
@@ -281,24 +296,20 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 }
 
 #drop-icon {
-    font-size: 28px;
+    font-size: 32px;
     background-color: #e8f0ff;
     color: #2563eb;
     border-radius: 24px;
-    padding: 10px;
-    min-width: 48px;
-    max-width: 48px;
-    min-height: 48px;
-    max-height: 48px;
+    padding: 12px;
+    min-width: 54px;
+    max-width: 54px;
+    min-height: 54px;
+    max-height: 54px;
 }
 #drop-text {
     color: #475569;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 500;
-}
-#drop-or {
-    color: #94a3b8;
-    font-size: 12px;
 }
 
 #add-btn {
@@ -430,10 +441,12 @@ QHeaderView::section {
 
 /* Jobs card: "Recent jobs" label + table header row sit flat on card (no inner gray bar) */
 #jobs-recent-title {
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 800;
     color: #64748b;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.4px;
     background-color: transparent;
     border: none;
     border-radius: 0px;
@@ -470,16 +483,18 @@ QPushButton#start-btn:pressed {
     background-color: #1d4ed8;
 }
 QPushButton#start-btn:disabled {
-    background-color: #334155;
-    color: #64748b;
-    border: none;
+    background-color: #e2e8f0;
+    color: #94a3b8;
+    border: 1px solid #cbd5e1;
 }
 
 #section-title {
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 800;
     color: #64748b;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.4px;
 }
 
 #job-card {
@@ -576,20 +591,32 @@ QMainWindow, QWidget {
 }
 
 #sidebar-logo {
-    font-size: 17px;
-    font-weight: 700;
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
+    word-spacing: -5px;
     color: #f1f5f9;
-    padding: 4px 0px;
-    line-height: 1.25;
+    padding: 4px 0px 2px 0px;
+    margin: 0px;
+    line-height: 1.22;
     background-color: transparent;
     border: none;
     border-radius: 0px;
 }
 
 #sidebar-sub {
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
     font-size: 12px;
+    font-weight: 500;
+    letter-spacing: -0.035em;
+    word-spacing: -1px;
     color: #475569;
     padding: 0px;
+    margin: 0px;
+    margin-left: 5px;
     background-color: transparent;
     border: none;
     border-radius: 0px;
@@ -797,8 +824,11 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 }
 
 #page-title {
-    font-size: 24px;
-    font-weight: 700;
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
     color: #f1f5f9;
 }
 
@@ -820,24 +850,20 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 }
 
 #drop-icon {
-    font-size: 28px;
+    font-size: 32px;
     background-color: #1e2d4a;
     color: #3b82f6;
     border-radius: 24px;
-    padding: 10px;
-    min-width: 48px;
-    max-width: 48px;
-    min-height: 48px;
-    max-height: 48px;
+    padding: 12px;
+    min-width: 54px;
+    max-width: 54px;
+    min-height: 54px;
+    max-height: 54px;
 }
 #drop-text {
     color: #94a3b8;
-    font-size: 14px;
+    font-size: 15px;
     font-weight: 500;
-}
-#drop-or {
-    color: #475569;
-    font-size: 12px;
 }
 
 #add-btn {
@@ -959,10 +985,12 @@ QHeaderView::section {
 }
 
 #jobs-recent-title {
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 800;
     color: #94a3b8;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.4px;
     background-color: transparent;
     border: none;
     border-radius: 0px;
@@ -1004,10 +1032,12 @@ QPushButton#start-btn:disabled {
 }
 
 #section-title {
+    font-family: 'SF Pro Rounded', 'Nunito', 'Sniglet', 'Chalkboard SE', 'Segoe UI Variable', 'Segoe UI',
+        sans-serif;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 800;
     color: #94a3b8;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.4px;
 }
 
 #job-card {

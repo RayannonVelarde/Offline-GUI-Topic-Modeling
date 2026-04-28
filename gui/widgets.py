@@ -89,12 +89,12 @@ class DropZone(QLabel):
         self.on_files_dropped = on_files_dropped
         self.setObjectName("drop-zone")
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumHeight(160)
+        self.setMinimumHeight(188)
         self.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.setSpacing(8)
+        layout.setSpacing(10)
 
         icon = QLabel("⬆")
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -105,11 +105,6 @@ class DropZone(QLabel):
         text.setAlignment(Qt.AlignmentFlag.AlignCenter)
         text.setObjectName("drop-text")
         layout.addWidget(text)
-
-        or_lbl = QLabel("or")
-        or_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        or_lbl.setObjectName("drop-or")
-        layout.addWidget(or_lbl)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():

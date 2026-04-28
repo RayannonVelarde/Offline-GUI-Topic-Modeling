@@ -4,7 +4,7 @@ studio_engine.py — Studio backend engine (Step C).
 Subprocess contract (called by gui/main_window.py):
 
     python studio_engine.py <audio_path>
-        --num-speakers N
+        --num-speakers N   (clamped to 1..MAX_DIARIZATION_SPEAKERS, currently 8)
         [--model {tiny,base,small,medium,large-v2,large-v3,large-v3-turbo}]
         [--compute-type {auto,float32,float16,int8,int8_float16}]
         [--batch-size N]
@@ -135,6 +135,10 @@ OPUS_MT_MODELS = {
 # --------------------------------------------------------------------------- #
 # Config
 # --------------------------------------------------------------------------- #
+
+# Pyannote/WhisperX diarization: GUI and CLI both clamp --num-speakers to this
+# upper bound (typical conversations; larger values rarely help accuracy).
+MAX_DIARIZATION_SPEAKERS = 8
 
 
 @dataclass
@@ -1014,8 +1018,11 @@ def _parse_args(argv=None) -> argparse.Namespace:
         "--num-speakers",
         type=int,
         default=2,
-        help="Upper bound on the number of speakers for diarization "
-        "(pyannote max_speakers). Min is always 1. Default: 2.",
+        help=(
+            "Upper bound on the number of speakers for diarization "
+            f"(pyannote max_speakers). Clamped to 1..{MAX_DIARIZATION_SPEAKERS}. "
+            "Default: 2."
+        ),
     )
     diarize_group = p.add_mutually_exclusive_group()
     diarize_group.add_argument(
@@ -1129,9 +1136,12 @@ def _config_from_args(args: argparse.Namespace) -> EngineConfig:
     except Exception:
         pass
 
+    _ns = int(args.num_speakers)
+    _ns = max(1, min(MAX_DIARIZATION_SPEAKERS, _ns))
+
     return EngineConfig(
         audio_path=args.audio,
-        num_speakers=args.num_speakers,
+        num_speakers=_ns,
         diarize=args.diarize,
         split_on_speaker_change=args.split_on_speaker_change,
         model=args.model,
