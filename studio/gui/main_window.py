@@ -1301,6 +1301,9 @@ class MainWindow(QMainWindow):
             )
             if not checked:
                 self._apply_review_segment_highlight(None)
+            else:
+                pos = int(self._review_player.position()) if self._review_player is not None else 0
+                self._sync_review_highlight_from_time_ms(pos)
 
         self.review_sync_btn.toggled.connect(_on_sync_toggled)
 
@@ -3248,7 +3251,7 @@ class MainWindow(QMainWindow):
                 return i
             if stf <= t_sec:
                 best = i
-        return best
+        return best if best is not None else (0 if segs else None)
 
     def _review_active_char_format(self) -> QTextCharFormat:
         fmt = QTextCharFormat()
