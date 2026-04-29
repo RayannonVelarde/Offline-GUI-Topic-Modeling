@@ -1,0 +1,67 @@
+Interviewer: Can you introduce yourself and describe your current work, study, or daily responsibilities?
+Participant: I’m Luis, and I work remotely as a junior software developer for a mid-sized company that builds logistics software. My official title makes it sound like my world is mostly code, but honestly my day is a mix of coding, debugging, meetings, documentation, and trying to
+Participant: understand how people much more senior than me think about systems. Remote work means my apartment is also my office, which can be convenient but also weirdly disorienting if I’m not careful.
+Participant: I usually start with stand-up, then spend the day moving between tickets, code reviews, and Slack messages. Sometimes I get into a really focused flow and feel like I am solving actual puzzles. Other times I spend three hours untangling a bug caused by one tiny assumption buried
+Participant: somewhere I did not initially see. That can be satisfying, but it can also make the day feel mentally jagged.
+Participant: Outside work, I still help my family a lot. I’m the tech support person, the English-form person for some relatives, and the person younger cousins ask about college or computer stuff. So even though my job is in tech, I don’t experience it as separate from family life. It feels
+Participant: like my technical knowledge keeps spilling into ordinary responsibilities.
+
+Interviewer: Tell me about the community or environment you grew up in and how it shaped you.
+Participant: I grew up in Las Cruces in a mixed English-Spanish household where language moved around depending on topic, mood, and generation. My grandparents were more comfortable in Spanish, my parents switched constantly, and my siblings and I were probably too fast in English sometimes.
+Participant: So from early on I understood that communication was not just about vocabulary. It was about respect, speed, identity, and who got to feel fully themselves in a conversation.
+Participant: My environment also shaped me through contrast. I was into computers and games early, but I was also very much in a local community where family events, church functions, school sports, and neighborhood relationships mattered. So I never had the feeling that “tech” belonged to one
+Participant: world and “community” belonged to another. That probably influences how I think about software now. I care about usability because I know the people on the other side of systems are not abstractions.
+Participant: I was also shaped by being first in my immediate family to go into a tech career. That created pride, but also some pressure. People saw it as a path to stability, and I internalized that pretty strongly.
+
+Interviewer: What have been the biggest challenges in your education or career path?
+Participant: The biggest challenge has been confidence. In tech, there are so many ways to feel behind. People online make everything look effortless, and then you get into an actual workplace and realize how much there is to learn that was never covered in school or tutorials. There is a
+Participant: culture of confidence in the field that can make normal uncertainty feel like personal failure.
+Participant: Another challenge has been figuring out how to grow professionally while staying grounded where I come from. A lot of tech culture still assumes that ambition means moving to certain cities, adopting certain lifestyles, and talking in a very specific way. I do not want to reject
+Participant: growth, but I also do not want to become detached from my family or from the place that made me.
+Participant: Remote work can also make mentorship harder. People are helpful, but it is different from being physically near others and absorbing how they work. Sometimes I feel like I am learning through a glass wall—close to the process, but still translating a lot on my own.
+
+Interviewer: How do technology and digital tools show up in your daily life or work?
+Participant: Technology is my work, but it is also the environment I am trying not to drown in. I build software all day, and then if I’m not careful I unwind by consuming more screens. So I’m pretty conscious of how much of my life is mediated through devices now.
+Participant: At the same time, technology genuinely expands possibility. Remote work let me get a job without leaving home immediately. Online communities helped me learn to code. Digital tools let me help my family with forms, appointments, translations, and troubleshooting. So I am not
+Participant: anti-technology at all. I’ve seen it open doors.
+Participant: But I also think a lot about who software is designed for. Even in my own company, I notice how easy it is for teams to assume users have time, attention, and technical comfort that many people just do not have. My background makes that visible to me in a way it might not be to
+Participant: everyone.
+
+Interviewer: Can you describe a time when language, culture, or identity affected an important experience for you?
+Participant: A moment that stands out was helping an older relative use an online benefits portal. The site technically had a Spanish option, but the translation was stiff and confusing, and some pages switched back to English unexpectedly. Watching him struggle made me realize how people can be
+Participant: excluded by systems that appear accessible on paper.
+Participant: That experience affected me because I could see how dignity gets chipped away in these interactions. He is smart, resourceful, and fully capable in so many domains, but the system positioned him as deficient. That stayed with me and probably explains why I care so much about
+Participant: interface clarity now.
+Participant: Identity affects me in other ways too. In some tech spaces, being from southern New Mexico and coming from a bilingual working-class family is almost treated like surprising background information. People are not always rude, but there is an assumption about where “technical”
+Participant: people come from that I do not fit.
+
+Interviewer: What kinds of support systems or relationships have helped you through difficult periods?
+Participant: My support system is mostly family and a few close friends, plus one former professor who still checks in on me. My parents are proud, but they do not always understand what I do day to day, which is kind of funny. They know it involves computers and that apparently it is serious
+Participant: because I am always in meetings. But their support shows up in food, encouragement, and reminding me that progress does not have to look flashy to be real.
+Participant: My friends help in a different way. Some are in tech and some are not, which I think is healthy for me. The ones in tech understand the imposter syndrome and the weirdness of remote work. The ones outside tech remind me that the world is larger than product roadmaps and deployment
+Participant: schedules.
+Participant: I also rely on online learning communities, though selectively. Some are genuinely generous and useful. Others can make you feel like you are permanently behind. I’ve had to be careful about which spaces actually support growth versus just trigger comparison.
+
+Interviewer: How do you think about mental health, stress, or burnout in your own life?
+Participant: Stress for me often looks like mental overextension more than emotional collapse. I start jumping between tasks too quickly, rereading the same thing three times, and staying online longer because I feel behind. Remote work can intensify that because there is no natural office
+Participant: ending unless you create one.
+Participant: Burnout is harder to detect when you are young because people frame overwork as ambition. If you are tired, you tell yourself it means you are learning and hustling. Sometimes that is true. Sometimes it just means your life is shrinking around work. I am trying to learn the
+Participant: difference earlier rather than later.
+Participant: What helps me most is getting physically away from my desk, going to the gym, driving without a podcast, and spending time with family where nobody cares about software terminology. That returns me to proportion. I think proportion is underrated as a mental health practice.
+
+Interviewer: What changes have you seen in your community over the last few years?
+Participant: My community has changed a lot in the sense that more people are connected to digital systems now, but not necessarily in ways that feel empowering. There is more online access, more remote work, more digital schooling, more platforms for everything. But there are still gaps in
+Participant: infrastructure and skill support, and those gaps become obvious whenever something important has to be done online.
+Participant: I’ve also seen younger people feel both more connected globally and more uncertain locally. There is more exposure to opportunity, but also more anxiety about housing, jobs, and whether staying close to family is financially realistic. That tension feels very common in my age
+Participant: group.
+Participant: At the same time, I think there is a lot of talent here that gets underestimated. People are creative, adaptive, and capable. The issue is often access to pathways, not lack of ability.
+
+Interviewer: What goals or hopes do you have for the future, both personally and professionally?
+Participant: Personally, I want to become a stronger engineer without losing my relationship to everyday users. I’m interested in eventually moving toward product or UX-adjacent work because I care about how systems feel for the people using them, not just whether they technically function.
+Participant: I also want financial stability, maybe enough to help my parents more substantially, buy a home someday, and build a life that does not require leaving every part of my background behind. I’m ambitious, but not in a way that makes detachment the goal.
+Participant: Long term, I’d love to mentor students from places like mine who are curious about tech but do not see themselves reflected in the usual stories about who belongs in the field.
+
+Interviewer: Is there anything else you think researchers should understand about people with experiences like yours?
+Participant: Researchers should understand that digital access is not the same as digital ease. A person can have a phone, a laptop, or an account and still be dealing with confusing interfaces, unstable internet, translation problems, and fear of making mistakes.
+Participant: I would also say that young bilingual people often become informal infrastructure for their families. We are translators, troubleshooters, and navigators. That role builds skill, but it also creates responsibility that is rarely acknowledged.
+Participant: And finally, I think people from smaller cities or border regions are often discussed as though they are peripheral to innovation, when actually they are dealing with the human consequences of design decisions all the time. That perspective should matter more.
