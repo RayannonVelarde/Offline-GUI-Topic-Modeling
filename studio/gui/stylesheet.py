@@ -13,7 +13,7 @@ LIGHT_STYLESHEET = """
 QMainWindow, QWidget {
     background-color: #f3f4f6; /* soft off-white */
     color: #1f2937;            /* dark gray (not pure black) */
-    font-family: 'SF Pro Display', 'Segoe UI', sans-serif;
+    font-family: 'Helvetica Neue', 'Segoe UI', sans-serif;
     font-size: 13px;
 }
 
@@ -525,7 +525,7 @@ QProgressBar {
     background-color: #e2e8f0;
     border-radius: 3px;
     height: 4px;
-    text-visible: false;
+    color: transparent;
     border: none;
 }
 QProgressBar::chunk {
@@ -578,7 +578,7 @@ DARK_STYLESHEET = """
 QMainWindow, QWidget {
     background-color: #0f1117;
     color: #e2e8f0;
-    font-family: 'SF Pro Display', 'Segoe UI', sans-serif;
+    font-family: 'Helvetica Neue', 'Segoe UI', sans-serif;
     font-size: 13px;
 }
 
@@ -1068,7 +1068,7 @@ QProgressBar {
     background-color: #1e2433;
     border-radius: 3px;
     height: 4px;
-    text-visible: false;
+    color: transparent;
     border: none;
 }
 QProgressBar::chunk {
