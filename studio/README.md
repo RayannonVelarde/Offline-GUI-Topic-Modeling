@@ -45,4 +45,4 @@ Run the GUI from the `studio/` directory:
 python gui/main.py
 ```
 
-The engine (`studio_engine.py`) is launched automatically by the GUI — you don't need to run it directly
+The engine (`studio_engine.py`) is launched automatically by the GUI — you don't need to run it directly.
