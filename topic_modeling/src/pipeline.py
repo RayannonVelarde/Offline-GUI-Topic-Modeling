@@ -9,7 +9,7 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     input_path = Path(input_path)
 
     # run preprocessing
-    preprocess_cmd = ["python", "preprocess.py", str(input_path)]
+    preprocess_cmd = [sys.executable, "preprocess.py", str(input_path)]
     if interviewer_speaker:
         preprocess_cmd.append(interviewer_speaker)
 
@@ -29,9 +29,9 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     topic_results_csv = f"../output/{original_name}_topic_results.csv"
     topic_model_path = f"../output/{original_name}_topic_model"
     topic_summary_json = f"../output/{original_name}_topic_summary.json"
-    
+
     # run topic modeling
-    topic_cmd = ["python", "topic_modeling.py", preprocessed_csv]
+    topic_cmd = [sys.executable, "topic_modeling.py", preprocessed_csv]
     if use_labeling:
         topic_cmd.extend(["--label", ollama_model])
 
@@ -46,9 +46,9 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     print(f"Topic summary: {topic_summary_json}")
 
     if use_labeling:
-        print(f"Ollama labeling: enabled ({ollama_model})")
+        print(f"GPT4All labeling: enabled ({ollama_model})")
     else:
-        print("Ollama labeling: disabled")
+        print("GPT4All labeling: disabled")
 
 # CLI entry
 if __name__ == "__main__":

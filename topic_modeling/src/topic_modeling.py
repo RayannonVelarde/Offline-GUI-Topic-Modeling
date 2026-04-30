@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-import requests
 import shutil
 from pathlib import Path
 import pandas as pd
@@ -48,7 +47,7 @@ def generate_embeddings(documents):
     return embeddings
 
 # build topic model
-def build_topic_model():
+def build_topic_model(n_docs=None):
     custom_stop_words = list(ENGLISH_STOP_WORDS.union({
         "yes", "like", "im", "dont", "did", "oh", "okay",
         "think", "right", "know", "really"
@@ -57,17 +56,29 @@ def build_topic_model():
 
     vectorizer_model = CountVectorizer(stop_words=custom_stop_words)
 
+    # Scale the dimensionality-reduction + clustering parameters with the
+    # number of documents. UMAP requires n_neighbors < n_docs and
+    # n_components < n_docs; HDBSCAN's min_cluster_size must be at least 2
+    # but not larger than the dataset. Without this, small transcripts
+    # crash with "k must be <= number of training points".
+    if n_docs is None or n_docs <= 0:
+        n_docs = 30  # legacy default sizing
+
+    n_neighbors = max(2, min(15, n_docs - 1))
+    n_components = max(2, min(5, n_docs - 1))
+    min_cluster_size = max(2, min(4, max(2, n_docs // 4)))
+
     umap_model = UMAP(
-        n_neighbors=5,
-        n_components=5,
+        n_neighbors=n_neighbors,
+        n_components=n_components,
         min_dist=0.0,
         metric="cosine",
         random_state=42
     )
 
     hdbscan_model = HDBSCAN(
-        min_cluster_size=4,
-        min_samples=2,
+        min_cluster_size=min_cluster_size,
+        min_samples=max(1, min(2, min_cluster_size - 1)),
         metric="euclidean",
         prediction_data=True
     )
@@ -81,10 +92,10 @@ def build_topic_model():
     )
 
     return topic_model
-    
+
 # run BERTopic clustering on transcript segments
 def run_topic_model(documents, embeddings):
-    topic_model = build_topic_model()
+    topic_model = build_topic_model(n_docs=len(documents))
     topics, probs = topic_model.fit_transform(documents, embeddings)
     return topic_model, topics, probs
 
@@ -175,57 +186,50 @@ def save_topic_summary(topic_summary, original_name):
     print(f"Topic summary saved to {output_file}")
     return output_file
     
-# generate a short label for one topic using local ollama
-def generate_label_with_ollama(topic_entry, model_name="llama3.1"):
-    prompt = f"""
-You are labeling a topic from interview transcript analysis.
-
-Create a short, human-readable topic label in 3 to 5 words.
-Do not use quotation marks.
-Do not explain your answer.
-Return only the label.
-
-Keywords:
-{", ".join(topic_entry["keywords"])}
-
-Representative excerpts:
-- {topic_entry["examples"][0] if len(topic_entry["examples"]) > 0 else ""}
-- {topic_entry["examples"][1] if len(topic_entry["examples"]) > 1 else ""}
-- {topic_entry["examples"][2] if len(topic_entry["examples"]) > 2 else ""}
-""".strip()
-
-    response = requests.post(
-        "http://localhost:11434/api/generate",
-        json={
-            "model": model_name,
-            "prompt": prompt,
-            "stream": False
-        },
-        timeout=120
+# generate a short label for one topic using GPT4All (fully offline)
+def _build_label_prompt(topic_entry):
+    examples = topic_entry.get("examples", [])
+    ex_lines = "\n".join(
+        f"- {ex[:200]}" for ex in examples[:3] if ex
+    )
+    return (
+        "You are labeling a topic from interview transcript analysis.\n"
+        "Create a short, human-readable topic label in 3 to 5 words.\n"
+        "Do not use quotation marks. Do not explain. Return only the label.\n\n"
+        f"Keywords: {', '.join(topic_entry.get('keywords', []))}\n\n"
+        f"Representative excerpts:\n{ex_lines}"
     )
 
-    response.raise_for_status()
-    data = response.json()
 
-    label = data.get("response", "").strip()
-    return label if label else None
-    
-# add ollama labels to all topics
-def add_llm_labels(topic_summary, model_name="llama3.1"):
+# add GPT4All labels to all topics (loads model once for efficiency)
+def add_llm_labels(topic_summary, model_name="mistral-7b-openorca.Q4_0.gguf"):
+    try:
+        from gpt4all import GPT4All
+    except ImportError:
+        print("[warn] gpt4all is not installed — skipping LLM labeling.")
+        return topic_summary
+
+    try:
+        model = GPT4All(model_name, verbose=False)
+    except Exception as e:
+        print(f"[error] Could not load GPT4All model '{model_name}': {e}")
+        return topic_summary
+
     labeled_summary = []
-
     for entry in topic_summary:
         entry_copy = entry.copy()
         try:
-            label = generate_label_with_ollama(entry_copy, model_name=model_name)
+            prompt = _build_label_prompt(entry_copy)
+            with model.chat_session():
+                raw = model.generate(prompt, max_tokens=30).strip()
+            label = raw.splitlines()[0].strip('" ') if raw else None
             entry_copy["generated_label"] = label
             print(f"Generated label for Topic {entry_copy['topic_id']}: {label}")
         except Exception as e:
             print(f"Could not generate label for Topic {entry_copy['topic_id']}: {e}")
             entry_copy["generated_label"] = None
-
         labeled_summary.append(entry_copy)
-        
+
     return labeled_summary
         
 # print topic summary and top keywords
@@ -253,21 +257,21 @@ if __name__ == "__main__":
     # usage:
     # python topic_modeling.py <cleaned_transcript_csv>
     # python topic_modeling.py <cleaned_transcript_csv> --label
-    # python topic_modeling.py <cleaned_transcript_csv> --label mistral
+    # python topic_modeling.py <cleaned_transcript_csv> --label mistral-7b-openorca.Q4_0.gguf
     if len(sys.argv) < 2:
-        print("Usage: python topic_modeling.py <cleaned_transcript_csv> [--label] [ollama_model_name]")
+        print("Usage: python topic_modeling.py <cleaned_transcript_csv> [--label] [gpt4all_model_name]")
         sys.exit(1)
 
     input_file = sys.argv[1]
 
     use_labeling = False
-    ollama_model_name = "llama3.1"
+    gpt4all_model_name = "mistral-7b-openorca.Q4_0.gguf"
 
     if len(sys.argv) >= 3 and sys.argv[2] == "--label":
         use_labeling = True
 
     if len(sys.argv) >= 4:
-        ollama_model_name = sys.argv[3]
+        gpt4all_model_name = sys.argv[3]
 
     original_name = os.path.splitext(os.path.basename(input_file))[0]
 
@@ -281,7 +285,7 @@ if __name__ == "__main__":
     topic_summary = build_topic_summary(topic_model, df, topics)
 
     if use_labeling:
-        topic_summary = add_llm_labels(topic_summary, model_name=ollama_model_name)
+        topic_summary = add_llm_labels(topic_summary, model_name=gpt4all_model_name)
 
     save_topic_summary(topic_summary, original_name)
     print_topic_summary(topic_model, topic_summary)

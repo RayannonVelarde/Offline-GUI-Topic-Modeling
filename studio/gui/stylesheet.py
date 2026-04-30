@@ -606,6 +606,18 @@ QScrollBar::handle:vertical {
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
+
+/* ── AI Assistant panel (light) ── */
+#ai-assistant-panel {
+    background-color: #ffffff;
+    border: none;
+    border-radius: 0px;
+}
+#ai-header {
+    background-color: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    border-radius: 0px;
+}
 """
 
 
@@ -1183,6 +1195,18 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
+}
+
+/* ── AI Assistant panel (dark) ── */
+#ai-assistant-panel {
+    background-color: #141720;
+    border: none;
+    border-radius: 0px;
+}
+#ai-header {
+    background-color: #0f1117;
+    border-bottom: 1px solid #1e2433;
+    border-radius: 0px;
 }
 """
 

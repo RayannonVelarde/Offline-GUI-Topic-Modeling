@@ -45,6 +45,68 @@ def assign_role(speaker, interviewer_speaker):
 def word_count(text):
     return len(str(text).split())
 
+
+# Sentence splitter used for the small-transcript fallback below.
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def chunk_text_into_sentence_groups(text, target_words=80):
+    """Split text into ~target_words-sized chunks at sentence boundaries.
+
+    Used when a transcript ends up with too few merged segments to cluster
+    (e.g. all lines share one speaker label, so build_initial_segments
+    collapses everything into a single document).
+    """
+    sentences = [s.strip() for s in _SENT_SPLIT_RE.split(text or "") if s.strip()]
+    if not sentences:
+        return []
+
+    chunks = []
+    current = []
+    current_wc = 0
+    for sentence in sentences:
+        wc = word_count(sentence)
+        if current and current_wc + wc > target_words:
+            chunks.append(" ".join(current))
+            current = []
+            current_wc = 0
+        current.append(sentence)
+        current_wc += wc
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+def resegment_if_too_small(df, min_segments=8, target_words=80):
+    """Re-chunk each row by sentence when a transcript collapsed to 1–N rows.
+
+    Without this, BERTopic's UMAP/HDBSCAN fails on tiny inputs with
+    "k must be less than or equal to the number of training points".
+    """
+    if df.empty or len(df) >= min_segments:
+        return df
+
+    rows = []
+    seg_id = 0
+    for _, row in df.iterrows():
+        text = str(row.get("cleaned_text", "")).strip()
+        chunks = chunk_text_into_sentence_groups(text, target_words=target_words)
+        if not chunks:
+            continue
+        for chunk in chunks:
+            new_row = row.to_dict()
+            new_row["segment_id"] = seg_id
+            new_row["cleaned_text"] = chunk
+            seg_id += 1
+            rows.append(new_row)
+
+    if not rows:
+        return df
+
+    new_df = pd.DataFrame(rows)
+    new_df = new_df[df.columns]
+    return new_df
+
 # build one segment record
 def make_segment(segment_id, speaker, role, include_in_topic_model, cleaned_text, source_file, timestamp=None):
     return {
@@ -177,9 +239,14 @@ def preprocess_transcript(file_path, interviewer_speaker=None):
     initial_segments = build_initial_segments(file_path, interviewer_speaker)
 
     if interviewer_speaker is None:
-        return merge_when_interviewer_included(initial_segments)
+        df = merge_when_interviewer_included(initial_segments)
     else:
-        return merge_when_interviewer_excluded(initial_segments)
+        df = merge_when_interviewer_excluded(initial_segments)
+
+    # Single-speaker transcripts (e.g. everything tagged [Unknown]) collapse
+    # into one row, which crashes BERTopic. Fall back to sentence-grouped
+    # chunks so the topic model has at least a handful of documents.
+    return resegment_if_too_small(df)
 
 # process file or folder
 def preprocess_input(input_path, interviewer_speaker=None):
@@ -219,6 +286,7 @@ def preprocess_input(input_path, interviewer_speaker=None):
             all_dfs.append(df)
 
         combined_df = pd.concat(all_dfs, ignore_index=True)
+        combined_df = resegment_if_too_small(combined_df)
         combined_output = f"../output/{input_path.name}.csv"
         combined_df.to_csv(combined_output, index=False)
 

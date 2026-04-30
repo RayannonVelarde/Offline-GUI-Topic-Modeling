@@ -4,9 +4,9 @@ Topic Modeling page for the Speech to Text Studio GUI.
 Wraps Rayannon's pipeline (topic_modeling/src/pipeline.py) so users can:
   1. Pick a transcript .txt file (or folder of .txt files) from disk.
   2. Optionally specify the interviewer speaker label to exclude.
-  3. Optionally enable Ollama LLM labeling and choose the model name.
+  3. Optionally enable GPT4All LLM labeling and choose the model name.
   4. Run the full pipeline (preprocess → BERTopic) in a subprocess.
-  5. View the live log output and the resulting topic summary JSON.
+  5. View topic summary JSON results and optionally stream pipeline output to stderr.
   6. Show more excerpts for each topic.
   7. Click excerpts to open the original transcript and highlight the matching text.
 """
@@ -19,7 +19,7 @@ import re
 import sys
 
 from PySide6.QtCore import Qt, QProcess, QTimer, QSize
-from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QShowEvent, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import (
 )
 
 from nav_icons import make_folder_open_icon
+from llm_assistant import LLMAssistantPanel, TOPIC_QUICK_ACTIONS, _TOPIC_SYSTEM
 
 # Path resolution: topic_modeling/src lives two levels above this file
 # (studio/gui/  →  studio/  →  project root  →  topic_modeling/src)
@@ -51,6 +53,12 @@ _OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "topic_modeling", "output")
 
 # Match Settings / Review label column width for consistent alignment with other pages.
 _TOPICS_LABEL_W = 236
+
+# Cap how much transcript text is shipped to the local LLM as context.
+# Even small models choke on huge prompts, and most on-device models have
+# 4K–8K context windows. We trim per-file and overall total.
+_AI_CONTEXT_PER_FILE_CHARS = 8000
+_AI_CONTEXT_TOTAL_CHARS = 24000
 
 
 def _resolve_python() -> str:
@@ -70,6 +78,14 @@ class TopicModelingPage(QFrame):
         self.setObjectName("topics-page")
         self._theme_getter = theme_getter  # callable() → "light" | "dark"
         self._process: QProcess | None = None
+        self._did_equal_topic_split = False
+        self._results_ai_splitter: QSplitter | None = None
+        # Two separate context blobs, recombined and pushed to the AI panel
+        # whenever either changes. This lets the chatbot reason about the
+        # selected transcript even before any topic results exist.
+        self._transcript_context: str = ""
+        self._topics_context: str = ""
+        self._last_transcript_path: str = ""
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -108,6 +124,8 @@ class TopicModelingPage(QFrame):
         self._input_edit.setObjectName("settings-input")
         self._input_edit.setPlaceholderText("Select a transcript file or folder…")
         self._input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # Manual edits should also pick up speaker labels and feed the AI panel.
+        self._input_edit.editingFinished.connect(self._on_input_path_committed)
         browse_file_btn = QPushButton("File…")
         browse_file_btn.setObjectName("add-btn")
         browse_file_btn.clicked.connect(self._browse_file)
@@ -142,21 +160,21 @@ class TopicModelingPage(QFrame):
         speaker_hint.setObjectName("settings-hint")
         options_lay.addWidget(speaker_hint)
 
-        # Ollama labeling row
-        ollama_row = QHBoxLayout()
-        self._ollama_checkbox = QCheckBox("Enable Ollama LLM topic labeling")
-        self._ollama_checkbox.setObjectName("job-options-checkbox")
-        self._ollama_checkbox.toggled.connect(self._sync_ollama_model_enabled)
-        ollama_row.addWidget(self._ollama_checkbox)
-        ollama_row.addStretch(1)
-        options_lay.addLayout(ollama_row)
+        # GPT4All labeling row
+        gpt4all_row = QHBoxLayout()
+        self._gpt4all_checkbox = QCheckBox("Enable GPT4All LLM topic labeling")
+        self._gpt4all_checkbox.setObjectName("job-options-checkbox")
+        self._gpt4all_checkbox.toggled.connect(self._sync_gpt4all_model_enabled)
+        gpt4all_row.addWidget(self._gpt4all_checkbox)
+        gpt4all_row.addStretch(1)
+        options_lay.addLayout(gpt4all_row)
 
         model_row = QHBoxLayout()
         model_row.setSpacing(10)
-        model_lbl = QLabel("Ollama model name:")
+        model_lbl = QLabel("GPT4All model name:")
         model_lbl.setObjectName("settings-label")
         model_lbl.setFixedWidth(_TOPICS_LABEL_W)
-        self._model_edit = QLineEdit("llama3.1")
+        self._model_edit = QLineEdit("mistral-7b-openorca.Q4_0.gguf")
         self._model_edit.setObjectName("settings-input")
         self._model_edit.setEnabled(False)
         model_row.addWidget(model_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -172,25 +190,11 @@ class TopicModelingPage(QFrame):
         self._run_btn.clicked.connect(self._on_run_clicked)
         outer.addWidget(self._run_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        # ── Bottom splitter: log | results (Review-style compare panes) ──
+        # ── Bottom splitter: topic results | AI Assistant (50/50 on first layout) ──
         splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._results_ai_splitter = splitter
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
-
-        # Log panel
-        log_frame = QFrame()
-        log_frame.setObjectName("settings-card")
-        log_vlay = QVBoxLayout(log_frame)
-        log_vlay.setContentsMargins(16, 14, 16, 14)
-        log_vlay.setSpacing(10)
-        log_title = QLabel("Pipeline log")
-        log_title.setObjectName("section-title")
-        log_vlay.addWidget(log_title)
-        self._log_edit = QTextEdit()
-        self._log_edit.setObjectName("home-file-log")
-        self._log_edit.setReadOnly(True)
-        self._log_edit.setMinimumHeight(200)
-        log_vlay.addWidget(self._log_edit, 1)
 
         # Results panel
         results_frame = QFrame()
@@ -250,13 +254,46 @@ class TopicModelingPage(QFrame):
         results_body_lay.addWidget(self._results_scroll, 1)
         results_vlay.addWidget(results_body, 1)
 
-        splitter.addWidget(log_frame)
+        # AI Assistant panel (third pane)
+        ai_card = QFrame()
+        ai_card.setObjectName("settings-card")
+        ai_card_lay = QVBoxLayout(ai_card)
+        ai_card_lay.setContentsMargins(0, 0, 0, 0)
+        ai_card_lay.setSpacing(0)
+
+        theme = self._theme_getter() if self._theme_getter else "light"
+        self._ai_panel = LLMAssistantPanel(
+            theme=theme,
+            system_prompt=_TOPIC_SYSTEM,
+            quick_actions=TOPIC_QUICK_ACTIONS,
+        )
+        ai_card_lay.addWidget(self._ai_panel)
+
         splitter.addWidget(results_frame)
+        splitter.addWidget(ai_card)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([1, 1])
 
         outer.addWidget(splitter, 1)
+
+    def showEvent(self, event: QShowEvent):
+        super().showEvent(event)
+        if not self._did_equal_topic_split and self._results_ai_splitter is not None:
+            QTimer.singleShot(0, self._apply_equal_results_ai_split)
+
+    def _apply_equal_results_ai_split(self) -> None:
+        sp = self._results_ai_splitter
+        if sp is None or self._did_equal_topic_split:
+            return
+        total = sp.width()
+        if total < 48:
+            QTimer.singleShot(0, self._apply_equal_results_ai_split)
+            return
+        gap = sp.handleWidth()
+        inner = total - gap
+        half = inner // 2
+        sp.setSizes([half, inner - half])
+        self._did_equal_topic_split = True
 
     def _add_empty_results_placeholder(self) -> None:
         self._no_results_lbl = QLabel("Run the pipeline to see topic results here.")
@@ -289,9 +326,15 @@ class TopicModelingPage(QFrame):
             "#64748b",
         )
 
+    def refresh_theme(self) -> None:
+        """Align topic page with app light/dark after MainWindow applies theme."""
+        self.refresh_action_icons()
+        theme = self._theme_getter() if self._theme_getter else "light"
+        self._ai_panel.update_theme(theme)
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
-    def _sync_ollama_model_enabled(self, checked: bool) -> None:
+    def _sync_gpt4all_model_enabled(self, checked: bool) -> None:
         self._model_edit.setEnabled(checked)
 
     def _browse_file(self) -> None:
@@ -303,7 +346,7 @@ class TopicModelingPage(QFrame):
         )
         if path:
             self._input_edit.setText(path)
-            self._refresh_speaker_dropdown()
+            self._on_input_path_committed()
 
     def _browse_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -313,7 +356,16 @@ class TopicModelingPage(QFrame):
         )
         if path:
             self._input_edit.setText(path)
-            self._refresh_speaker_dropdown()
+            self._on_input_path_committed()
+
+    def _on_input_path_committed(self) -> None:
+        """Refresh anything that depends on the current input path."""
+        path = self._input_edit.text().strip()
+        if path == self._last_transcript_path:
+            return
+        self._last_transcript_path = path
+        self._refresh_speaker_dropdown()
+        self._refresh_ai_transcript_context(path)
 
     def _extract_speaker_from_line(self, line: str) -> str | None:
         """
@@ -425,6 +477,86 @@ class TopicModelingPage(QFrame):
                 "#eab308",
             )
 
+    # ── AI context wiring ────────────────────────────────────────────────
+
+    def _list_transcript_files(self, path: str) -> list[str]:
+        if os.path.isfile(path):
+            return [path]
+        if os.path.isdir(path):
+            return sorted(
+                os.path.join(path, fn)
+                for fn in os.listdir(path)
+                if fn.lower().endswith(".txt")
+            )
+        return []
+
+    def _speaker_stats_from_text(self, text: str) -> str:
+        """Return a compact speaker-turn summary for one transcript."""
+        from collections import Counter
+        counts: Counter[str] = Counter()
+        for line in text.splitlines():
+            speaker = self._extract_speaker_from_line(line)
+            if speaker:
+                counts[speaker] += 1
+        if not counts:
+            return ""
+        parts = [f"{spk} ({n} turn{'s' if n != 1 else ''})" for spk, n in counts.most_common()]
+        return "Speakers: " + ", ".join(parts)
+
+    def _build_transcript_context(self, path: str) -> str:
+        """Read the selected transcript(s) and shape them into AI context."""
+        files = self._list_transcript_files(path)
+        if not files:
+            return ""
+
+        header_lines = ["## TRANSCRIPT"]
+        chunks: list[str] = []
+        total = 0
+        for fp in files:
+            try:
+                with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                    body = f.read()
+            except Exception as e:
+                self._append_log(f"[warn] Could not read {fp} for AI context: {e}", "#eab308")
+                continue
+            body = body.strip()
+            if not body:
+                continue
+            stats = self._speaker_stats_from_text(body)
+            truncated = False
+            if len(body) > _AI_CONTEXT_PER_FILE_CHARS:
+                body = body[:_AI_CONTEXT_PER_FILE_CHARS]
+                truncated = True
+            file_header = f"### File: {os.path.basename(fp)}"
+            if truncated:
+                file_header += "  (truncated to first ~8 000 chars)"
+            if stats:
+                file_header += f"\n{stats}"
+            piece = f"{file_header}\n\n{body}"
+            if total + len(piece) > _AI_CONTEXT_TOTAL_CHARS:
+                chunks.append(
+                    f"### File: {os.path.basename(fp)}\n[omitted — context budget reached]"
+                )
+                break
+            chunks.append(piece)
+            total += len(piece)
+
+        if not chunks:
+            return ""
+        return "\n\n".join(header_lines + chunks)
+
+    def _refresh_ai_transcript_context(self, path: str) -> None:
+        self._transcript_context = self._build_transcript_context(path) if path else ""
+        self._push_ai_context()
+
+    def _push_ai_context(self) -> None:
+        parts: list[str] = []
+        if self._topics_context:
+            parts.append(self._topics_context)
+        if self._transcript_context:
+            parts.append(self._transcript_context)
+        self._ai_panel.set_context("\n\n".join(parts))
+
     def _open_output_folder(self) -> None:
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
@@ -433,47 +565,47 @@ class TopicModelingPage(QFrame):
         QDesktopServices.openUrl(QUrl.fromLocalFile(out))
 
     def _append_log(self, text: str, color: str | None = None) -> None:
-        line = text.rstrip("\n")
-        theme = self._theme_getter() if self._theme_getter else "light"
-        if color is None:
-            lower = line.lower()
-            if "error" in lower or "traceback" in lower or "exception" in lower:
-                color = "#ef4444"
-            elif "complete" in lower or "success" in lower or "saved" in lower:
-                color = "#22c55e"
-            else:
-                color = "#ffffff" if theme == "dark" else "#0f172a"
-        cur = self._log_edit.textCursor()
-        cur.movePosition(QTextCursor.MoveOperation.End)
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
-        cur.insertText(line + "\n", fmt)
-        self._log_edit.setTextCursor(cur)
-        self._log_edit.ensureCursorVisible()
+        """Echo pipeline/status lines to stderr (visible when launching from a terminal)."""
+        del color  # previously used by the removed log QTextEdit for coloring
+        print(text.rstrip("\n"), file=sys.stderr, flush=True)
 
     def _on_run_clicked(self) -> None:
         if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
             self._append_log("[warn] Pipeline is already running.", "#eab308")
+            QMessageBox.warning(self, "Topic Modeling", "The pipeline is already running.")
             return
 
         input_path = self._input_edit.text().strip()
         if not input_path:
             self._append_log("[error] Please select an input transcript file or folder.", "#ef4444")
+            QMessageBox.warning(
+                self,
+                "Topic Modeling",
+                "Please select an input transcript file or folder.",
+            )
             return
         if not os.path.exists(input_path):
             self._append_log(f"[error] Path does not exist: {input_path}", "#ef4444")
-            return
-        if not os.path.isfile(_PIPELINE_SCRIPT):
-            self._append_log(
-                f"[error] Pipeline script not found at:\n  {_PIPELINE_SCRIPT}\n"
-                "Make sure topic_modeling/src/pipeline.py exists.",
-                "#ef4444",
+            QMessageBox.warning(
+                self,
+                "Topic Modeling",
+                f"That path does not exist:\n{input_path}",
             )
             return
+        if not os.path.isfile(_PIPELINE_SCRIPT):
+            msg = (
+                f"Pipeline script not found at:\n{_PIPELINE_SCRIPT}\n\n"
+                "Make sure topic_modeling/src/pipeline.py exists."
+            )
+            self._append_log("[error] " + msg.replace("\n", " "), "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", msg)
+            return
 
-        # Clear log and results
-        self._log_edit.clear()
         self._clear_results()
+        # Stale topic results shouldn't bleed into the next conversation;
+        # transcript context stays so the user can already chat about the input.
+        self._topics_context = ""
+        self._push_ai_context()
 
         python = _resolve_python()
         args = [_PIPELINE_SCRIPT, input_path]
@@ -482,9 +614,9 @@ class TopicModelingPage(QFrame):
         if speaker:
             args.append(speaker)
 
-        if self._ollama_checkbox.isChecked():
+        if self._gpt4all_checkbox.isChecked():
             args.append("--label")
-            model = self._model_edit.text().strip() or "llama3.1"
+            model = self._model_edit.text().strip() or "mistral-7b-openorca.Q4_0.gguf"
             args.append(model)
 
         self._append_log(f"[pipeline] Starting: {os.path.basename(input_path)}")
@@ -498,10 +630,9 @@ class TopicModelingPage(QFrame):
         self._process.start(python, args)
 
         if not self._process.waitForStarted(5000):
-            self._append_log(
-                f"[error] Failed to start pipeline: {self._process.errorString()}",
-                "#ef4444",
-            )
+            err = self._process.errorString()
+            self._append_log(f"[error] Failed to start pipeline: {err}", "#ef4444")
+            QMessageBox.critical(self, "Topic Modeling", f"Failed to start pipeline:\n{err}")
             self._process = None
         else:
             self._run_btn.setEnabled(False)
@@ -532,9 +663,9 @@ class TopicModelingPage(QFrame):
             self._append_log("[pipeline] Pipeline completed successfully.", "#22c55e")
             QTimer.singleShot(500, self._load_latest_results)
         else:
-            self._append_log(
-                f"[pipeline] Pipeline failed (exit code {exit_code}).", "#ef4444"
-            )
+            msg = f"Pipeline failed (exit code {exit_code})."
+            self._append_log(f"[pipeline] {msg}", "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", msg)
         self._process = None
 
     # ── Results loading ───────────────────────────────────────────────────
@@ -558,7 +689,14 @@ class TopicModelingPage(QFrame):
             if fn.endswith("_topic_summary.json")
         ]
         if not candidates:
-            self._append_log("[warn] No topic_summary.json found in output dir.", "#eab308")
+            w = "[warn] No topic_summary.json found in output dir."
+            self._append_log(w, "#eab308")
+            QMessageBox.warning(
+                self,
+                "Topic Modeling",
+                "Pipeline finished but no topic summary JSON was found in the output folder.\n"
+                f"Expected files like *_topic_summary.json under:\n{_OUTPUT_DIR}",
+            )
             return
         candidates.sort(key=os.path.getmtime, reverse=True)
         latest = candidates[0]
@@ -567,8 +705,57 @@ class TopicModelingPage(QFrame):
                 summary = json.load(f)
         except Exception as e:
             self._append_log(f"[error] Could not read results: {e}", "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", f"Could not read results:\n{e}")
             return
         self._render_results(summary, latest)
+        self._feed_results_to_ai(summary)
+
+    def _feed_results_to_ai(self, summary: list[dict]) -> None:
+        """Format topic results as readable context and pass them to the AI panel."""
+        if not summary:
+            self._topics_context = ""
+            self._push_ai_context()
+            return
+
+        total_segments = sum(e.get("segment_count", 0) for e in summary)
+        lines = [
+            "## TOPIC ANALYSIS",
+            f"Total topics: {len(summary)}  |  Total segments analysed: {total_segments}",
+            "",
+        ]
+        for entry in summary:
+            tid = entry.get("topic_id", "?")
+            label = entry.get("generated_label", "")
+            count = entry.get("segment_count", 0)
+            keywords = entry.get("keywords", [])
+            examples = entry.get("examples", [])
+            source_files = entry.get("source_files", [])
+
+            heading = f"### Topic {tid}"
+            if label:
+                heading += f" — {label}"
+            heading += f"  ({count} segment{'s' if count != 1 else ''})"
+            lines.append(heading)
+
+            if keywords:
+                lines.append(f"Keywords: {', '.join(keywords)}")
+
+            # Collect unique source files for this topic
+            unique_sources = sorted({s for s in source_files if s})
+            if unique_sources:
+                lines.append(f"Sources: {', '.join(unique_sources)}")
+
+            if examples:
+                lines.append("Representative excerpts:")
+                for i, ex in enumerate(examples[:5]):
+                    src = source_files[i] if i < len(source_files) else None
+                    prefix = f"  [{src}] " if src else "  "
+                    lines.append(f'{prefix}"{ex[:300]}{"…" if len(ex) > 300 else ""}"')
+
+            lines.append("")
+
+        self._topics_context = "\n".join(lines)
+        self._push_ai_context()
 
     def load_results_from_file(self, path: str) -> None:
         """Public entry for loading a specific summary JSON (future use)."""
@@ -577,6 +764,7 @@ class TopicModelingPage(QFrame):
                 summary = json.load(f)
         except Exception as e:
             self._append_log(f"[error] Could not load {path}: {e}", "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", f"Could not load results file:\n{e}")
             return
         self._render_results(summary, path)
 
@@ -817,10 +1005,9 @@ class TopicModelingPage(QFrame):
         transcript_path = self._find_transcript_path_for_excerpt(source_file)
 
         if not transcript_path:
-            self._append_log(
-                "[error] Could not find the original transcript file for this excerpt.",
-                "#ef4444",
-            )
+            msg = "Could not find the original transcript file for this excerpt."
+            self._append_log("[error] " + msg, "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", msg)
             return
 
         try:
@@ -828,6 +1015,7 @@ class TopicModelingPage(QFrame):
                 raw_lines = f.readlines()
         except Exception as e:
             self._append_log(f"[error] Could not open transcript: {e}", "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", f"Could not open transcript:\n{e}")
             return
 
         display_text, search_text, search_to_display = self._build_transcript_view_data(
@@ -881,14 +1069,16 @@ class TopicModelingPage(QFrame):
                 transcript_view.setTextCursor(cursor)
                 transcript_view.ensureCursorVisible()
             else:
-                self._append_log(
-                    "[warn] Transcript opened, but the highlight mapping was out of range.",
-                    "#eab308",
+                QMessageBox.warning(
+                    self,
+                    "Topic Modeling",
+                    "Transcript opened, but the highlight mapping was out of range.",
                 )
         else:
-            self._append_log(
-                "[warn] Transcript opened, but the exact excerpt could not be highlighted.",
-                "#eab308",
+            QMessageBox.warning(
+                self,
+                "Topic Modeling",
+                "Transcript opened, but the exact excerpt could not be highlighted.",
             )
 
         dialog.exec()
