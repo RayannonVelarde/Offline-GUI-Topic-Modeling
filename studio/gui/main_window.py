@@ -1219,6 +1219,13 @@ class MainWindow(QMainWindow):
         self.review_open_folder_btn.setAutoRaise(True)
         self.review_open_folder_btn.clicked.connect(self._open_review_folder)
         selector_row.addWidget(self.review_open_folder_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.review_analyze_topics_btn = QPushButton("Analyze with Topic Modeling")
+        self.review_analyze_topics_btn.setObjectName("add-btn")
+        self.review_analyze_topics_btn.setToolTip("Send this transcript to the Topic Modeling page")
+        self.review_analyze_topics_btn.clicked.connect(self._send_review_transcript_to_topics)
+        selector_row.addWidget(self.review_analyze_topics_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         info_layout.addLayout(selector_row)
 
         self.review_info_path = QLabel("")
@@ -3972,6 +3979,39 @@ class MainWindow(QMainWindow):
             self._sync_review_highlight_from_time_ms(int(self._review_player.position()))
         else:
             self._apply_review_segment_highlight(None)
+
+    def _send_review_transcript_to_topics(self) -> None:
+        """Send the currently selected Review transcript into the Topic Modeling page."""
+        it = self._selected_review_item()
+        if not it:
+            QMessageBox.information(
+                self,
+                "No transcript selected",
+                "Select a completed transcript in Review first.",
+            )
+            return
+
+        # If the transcript is currently being edited, toggle edit off so it saves first.
+        if hasattr(self, "review_edit_transcript_btn") and self.review_edit_transcript_btn.isChecked():
+            self.review_edit_transcript_btn.setChecked(False)
+
+        transcript_path = (
+            it.get("transcript_path")
+            or it.get("spanish_path")
+            or self._review_transcript_path
+            or ""
+        ).strip()
+
+        if not transcript_path or not os.path.isfile(transcript_path):
+            QMessageBox.warning(
+                self,
+                "Transcript not found",
+                "Could not find the selected transcript file for topic modeling.",
+            )
+            return
+
+        self._topics_page.set_input_path(transcript_path)
+        self._show_page("topics")
 
     def _open_review_folder(self):
         it = self._selected_review_item()

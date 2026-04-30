@@ -277,6 +277,18 @@ class TopicModelingPage(QFrame):
         self._open_output_btn.setIcon(make_folder_open_icon(size=18, color_hex=col))
         self._open_output_btn.setIconSize(QSize(18, 18))
 
+    def set_input_path(self, path: str) -> None:
+        """Load a transcript path from another GUI page."""
+        if not path:
+            return
+
+        self._input_edit.setText(path)
+        self._refresh_speaker_dropdown()
+        self._append_log(
+            f"[info] Loaded transcript for topic modeling: {os.path.basename(path)}",
+            "#64748b",
+        )
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     def _sync_ollama_model_enabled(self, checked: bool) -> None:
