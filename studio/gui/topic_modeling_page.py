@@ -18,7 +18,7 @@ import os
 import re
 import sys
 
-from PySide6.QtCore import Qt, QProcess, QTimer
+from PySide6.QtCore import Qt, QProcess, QTimer, QSize
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -34,9 +34,12 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
+
+from nav_icons import make_folder_open_icon
 
 # Path resolution: topic_modeling/src lives two levels above this file
 # (studio/gui/  →  studio/  →  project root  →  topic_modeling/src)
@@ -46,7 +49,10 @@ _PROJECT_ROOT = os.path.dirname(_STUDIO_DIR)
 _PIPELINE_SCRIPT = os.path.join(_PROJECT_ROOT, "topic_modeling", "src", "pipeline.py")
 _OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "topic_modeling", "output")
 
-# Use the same venv resolution as studio_engine
+# Match Settings / Review label column width for consistent alignment with other pages.
+_TOPICS_LABEL_W = 236
+
+
 def _resolve_python() -> str:
     bin_name = "Scripts\\python.exe" if os.name == "nt" else "bin/python"
     for base in (_STUDIO_DIR, _PROJECT_ROOT):
@@ -79,14 +85,14 @@ class TopicModelingPage(QFrame):
         subtitle.setObjectName("page-sub")
         outer.addWidget(title)
         outer.addWidget(subtitle)
-        outer.addSpacing(4)
+        outer.addSpacing(6)
 
-        # ── Options card ─────────────────────────────────────────────────
+        # ── Pipeline options (same card pattern as Review selector row) ───
         options_card = QFrame()
         options_card.setObjectName("settings-card")
         options_lay = QVBoxLayout(options_card)
-        options_lay.setContentsMargins(16, 14, 16, 14)
-        options_lay.setSpacing(12)
+        options_lay.setContentsMargins(14, 12, 14, 12)
+        options_lay.setSpacing(6)
 
         section_lbl = QLabel("Pipeline options")
         section_lbl.setObjectName("section-title")
@@ -94,20 +100,19 @@ class TopicModelingPage(QFrame):
 
         # Input path row
         input_row = QHBoxLayout()
+        input_row.setSpacing(10)
         input_lbl = QLabel("Input (.txt file or folder):")
         input_lbl.setObjectName("settings-label")
-        input_lbl.setFixedWidth(220)
+        input_lbl.setFixedWidth(_TOPICS_LABEL_W)
         self._input_edit = QLineEdit()
         self._input_edit.setObjectName("settings-input")
         self._input_edit.setPlaceholderText("Select a transcript file or folder…")
         self._input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         browse_file_btn = QPushButton("File…")
         browse_file_btn.setObjectName("add-btn")
-        browse_file_btn.setFixedWidth(68)
         browse_file_btn.clicked.connect(self._browse_file)
         browse_folder_btn = QPushButton("Folder…")
         browse_folder_btn.setObjectName("add-btn")
-        browse_folder_btn.setFixedWidth(72)
         browse_folder_btn.clicked.connect(self._browse_folder)
         input_row.addWidget(input_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         input_row.addWidget(self._input_edit, 1)
@@ -117,9 +122,10 @@ class TopicModelingPage(QFrame):
 
         # Interviewer speaker row
         spk_row = QHBoxLayout()
+        spk_row.setSpacing(10)
         spk_lbl = QLabel("Exclude interviewer:")
         spk_lbl.setObjectName("settings-label")
-        spk_lbl.setFixedWidth(220)
+        spk_lbl.setFixedWidth(_TOPICS_LABEL_W)
 
         self._speaker_combo = QComboBox()
         self._speaker_combo.setObjectName("settings-input")
@@ -146,9 +152,10 @@ class TopicModelingPage(QFrame):
         options_lay.addLayout(ollama_row)
 
         model_row = QHBoxLayout()
+        model_row.setSpacing(10)
         model_lbl = QLabel("Ollama model name:")
         model_lbl.setObjectName("settings-label")
-        model_lbl.setFixedWidth(220)
+        model_lbl.setFixedWidth(_TOPICS_LABEL_W)
         self._model_edit = QLineEdit("llama3.1")
         self._model_edit.setObjectName("settings-input")
         self._model_edit.setEnabled(False)
@@ -158,18 +165,14 @@ class TopicModelingPage(QFrame):
 
         outer.addWidget(options_card)
 
-        # ── Run button row ────────────────────────────────────────────────
-        run_row = QHBoxLayout()
-        run_row.addStretch(1)
+        # Primary action (same placement as Home "Start Job")
         self._run_btn = QPushButton("▶  Run Pipeline")
         self._run_btn.setObjectName("start-btn")
         self._run_btn.setAttribute(Qt.WA_StyledBackground, True)
-        self._run_btn.setFixedWidth(148)
         self._run_btn.clicked.connect(self._on_run_clicked)
-        run_row.addWidget(self._run_btn)
-        outer.addLayout(run_row)
+        outer.addWidget(self._run_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-        # ── Bottom splitter: log | results ───────────────────────────────
+        # ── Bottom splitter: log | results (Review-style compare panes) ──
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
@@ -178,8 +181,8 @@ class TopicModelingPage(QFrame):
         log_frame = QFrame()
         log_frame.setObjectName("settings-card")
         log_vlay = QVBoxLayout(log_frame)
-        log_vlay.setContentsMargins(14, 12, 14, 12)
-        log_vlay.setSpacing(8)
+        log_vlay.setContentsMargins(16, 14, 16, 14)
+        log_vlay.setSpacing(10)
         log_title = QLabel("Pipeline log")
         log_title.setObjectName("section-title")
         log_vlay.addWidget(log_title)
@@ -193,36 +196,59 @@ class TopicModelingPage(QFrame):
         results_frame = QFrame()
         results_frame.setObjectName("settings-card")
         results_vlay = QVBoxLayout(results_frame)
-        results_vlay.setContentsMargins(14, 12, 14, 12)
-        results_vlay.setSpacing(8)
+        results_vlay.setContentsMargins(16, 14, 16, 14)
+        results_vlay.setSpacing(10)
 
         results_header = QHBoxLayout()
+        results_header.setSpacing(8)
         results_title = QLabel("Topic results")
         results_title.setObjectName("section-title")
         results_header.addWidget(results_title, 1)
-        self._open_output_btn = QPushButton("Open output folder")
-        self._open_output_btn.setObjectName("add-btn")
+        theme = self._theme_getter() if self._theme_getter else "light"
+        _folder_muted = "#94a3b8" if theme == "dark" else "#475569"
+        self._open_output_btn = QToolButton()
+        self._open_output_btn.setObjectName("review-open-folder-btn")
+        self._open_output_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        self._open_output_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._open_output_btn.setIcon(
+            make_folder_open_icon(size=18, color_hex=_folder_muted)
+        )
+        self._open_output_btn.setIconSize(QSize(18, 18))
+        self._open_output_btn.setFixedSize(22, 22)
+        self._open_output_btn.setToolTip("Open output folder")
+        self._open_output_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._open_output_btn.setAutoRaise(True)
         self._open_output_btn.clicked.connect(self._open_output_folder)
-        results_header.addWidget(self._open_output_btn, 0)
+        results_header.addWidget(self._open_output_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         results_vlay.addLayout(results_header)
 
-        # Scrollable topic cards area
+        # Inset panel for scroll content (nested box inside the results card)
+        results_body = QFrame()
+        results_body.setObjectName("topics-results-body")
+        results_body.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        results_body_lay = QVBoxLayout(results_body)
+        results_body_lay.setContentsMargins(10, 10, 10, 10)
+        results_body_lay.setSpacing(0)
+
         self._results_scroll = QScrollArea()
         self._results_scroll.setWidgetResizable(True)
         self._results_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._results_scroll.setAttribute(Qt.WA_StyledBackground, True)
         self._results_inner = QWidget()
-        self._results_inner_lay = QVBoxLayout(self._results_inner)
-        self._results_inner_lay.setContentsMargins(0, 0, 0, 0)
-        self._results_inner_lay.setSpacing(8)
-        self._results_inner_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._no_results_lbl = QLabel(
-            "Run the pipeline to see topic results here."
+        self._results_inner.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
         )
-        self._no_results_lbl.setObjectName("page-sub")
-        self._no_results_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._results_inner_lay.addWidget(self._no_results_lbl)
+        self._results_inner_lay = QVBoxLayout(self._results_inner)
+        self._results_inner_lay.setContentsMargins(12, 0, 12, 0)
+        self._results_inner_lay.setSpacing(8)
+        self._add_empty_results_placeholder()
         self._results_scroll.setWidget(self._results_inner)
-        results_vlay.addWidget(self._results_scroll, 1)
+        results_body_lay.addWidget(self._results_scroll, 1)
+        results_vlay.addWidget(results_body, 1)
 
         splitter.addWidget(log_frame)
         splitter.addWidget(results_frame)
@@ -231,6 +257,25 @@ class TopicModelingPage(QFrame):
         splitter.setSizes([1, 1])
 
         outer.addWidget(splitter, 1)
+
+    def _add_empty_results_placeholder(self) -> None:
+        self._no_results_lbl = QLabel("Run the pipeline to see topic results here.")
+        self._no_results_lbl.setObjectName("topics-results-empty")
+        self._no_results_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._no_results_lbl.setWordWrap(True)
+        self._no_results_lbl.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._results_inner_lay.addStretch(1)
+        self._results_inner_lay.addWidget(self._no_results_lbl)
+        self._results_inner_lay.addStretch(1)
+
+    def refresh_action_icons(self) -> None:
+        theme = self._theme_getter() if self._theme_getter else "light"
+        col = "#94a3b8" if theme == "dark" else "#475569"
+        self._open_output_btn.setIcon(make_folder_open_icon(size=18, color_hex=col))
+        self._open_output_btn.setIconSize(QSize(18, 18))
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -488,10 +533,7 @@ class TopicModelingPage(QFrame):
             item = self._results_inner_lay.takeAt(0)
             if item and item.widget():
                 item.widget().deleteLater()
-        self._no_results_lbl = QLabel("Run the pipeline to see topic results here.")
-        self._no_results_lbl.setObjectName("page-sub")
-        self._no_results_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._results_inner_lay.addWidget(self._no_results_lbl)
+        self._add_empty_results_placeholder()
 
     def _load_latest_results(self) -> None:
         """Find the most recently written *_topic_summary.json and render it."""
@@ -536,9 +578,16 @@ class TopicModelingPage(QFrame):
 
         if not summary:
             lbl = QLabel("No topics found in results.")
-            lbl.setObjectName("page-sub")
+            lbl.setObjectName("topics-results-empty")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
+            self._results_inner_lay.addStretch(1)
             self._results_inner_lay.addWidget(lbl)
+            self._results_inner_lay.addStretch(1)
             return
 
         source_lbl = QLabel(f"Source: {os.path.basename(source_path)}")

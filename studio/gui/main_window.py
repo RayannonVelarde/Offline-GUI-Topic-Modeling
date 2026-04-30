@@ -822,6 +822,8 @@ class MainWindow(QMainWindow):
         self._refresh_home_folder_row_icons()
         self._refresh_jobs_folder_row_icons()
         self._refresh_review_page_action_icons()
+        if getattr(self, "_topics_page", None) is not None:
+            self._topics_page.refresh_action_icons()
         self._refresh_home_log_disclosure_icons()
         self._refresh_home_remove_row_icons()
         self._refresh_settings_disclosure_icons()

@@ -211,6 +211,41 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     padding-bottom: 0px;
 }
 
+/* Topic modeling page: mirror Settings (transparent host + card section titles) */
+#topics-page QWidget {
+    background-color: transparent;
+}
+#topics-page #settings-card #section-title {
+    padding-bottom: 0px;
+}
+
+#topics-page QFrame#topics-results-body {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+}
+#topics-page QFrame#topics-results-body QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+#topics-page QLabel#topics-results-empty {
+    font-size: 13px;
+    color: #64748b;
+    padding: 8px 16px;
+    background: transparent;
+}
+
+#topics-page QToolButton#review-open-folder-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#topics-page QToolButton#review-open-folder-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
+
 /* ── Review ── */
 #review-page QWidget {
     background-color: transparent;
@@ -763,6 +798,41 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 
 #settings-page #settings-card #section-title {
     padding-bottom: 0px;
+}
+
+/* Topic modeling page: mirror Settings (transparent host + card section titles) */
+#topics-page QWidget {
+    background-color: transparent;
+}
+#topics-page #settings-card #section-title {
+    padding-bottom: 0px;
+}
+
+#topics-page QFrame#topics-results-body {
+    background-color: #0f1117;
+    border: 1px solid #1e2433;
+    border-radius: 10px;
+}
+#topics-page QFrame#topics-results-body QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+#topics-page QLabel#topics-results-empty {
+    font-size: 13px;
+    color: #64748b;
+    padding: 8px 16px;
+    background: transparent;
+}
+
+#topics-page QToolButton#review-open-folder-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#topics-page QToolButton#review-open-folder-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
 }
 
 /* ── Review ── */
