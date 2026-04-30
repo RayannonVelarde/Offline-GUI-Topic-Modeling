@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt, QProcess, QTimer
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -116,17 +117,24 @@ class TopicModelingPage(QFrame):
 
         # Interviewer speaker row
         spk_row = QHBoxLayout()
-        spk_lbl = QLabel("Interviewer speaker label:")
+        spk_lbl = QLabel("Exclude interviewer:")
         spk_lbl.setObjectName("settings-label")
         spk_lbl.setFixedWidth(220)
-        self._speaker_edit = QLineEdit()
-        self._speaker_edit.setObjectName("settings-input")
-        self._speaker_edit.setPlaceholderText(
-            "e.g. Interviewer or SPEAKER_00  (leave blank to include all speakers)"
-        )
+
+        self._speaker_combo = QComboBox()
+        self._speaker_combo.setObjectName("settings-input")
+        self._speaker_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._speaker_combo.addItem("None — include all speakers", None)
+
         spk_row.addWidget(spk_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        spk_row.addWidget(self._speaker_edit, 1)
+        spk_row.addWidget(self._speaker_combo, 1)
         options_lay.addLayout(spk_row)
+
+        speaker_hint = QLabel(
+            "Choose the interviewer speaker label to exclude their questions from topic modeling."
+        )
+        speaker_hint.setObjectName("settings-hint")
+        options_lay.addWidget(speaker_hint)
 
         # Ollama labeling row
         ollama_row = QHBoxLayout()
@@ -238,6 +246,7 @@ class TopicModelingPage(QFrame):
         )
         if path:
             self._input_edit.setText(path)
+            self._refresh_speaker_dropdown()
 
     def _browse_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -247,6 +256,117 @@ class TopicModelingPage(QFrame):
         )
         if path:
             self._input_edit.setText(path)
+            self._refresh_speaker_dropdown()
+
+    def _extract_speaker_from_line(self, line: str) -> str | None:
+        """
+        Extract speaker labels from transcript lines like:
+
+        [SPEAKER_00]: text
+        SPEAKER_00: text
+        [00:00:02.039 → 00:00:17.412] [SPEAKER_00]: text
+        [SPEAKER_00]: [00:00:02.039] text
+        Interviewer: text
+        Participant: text
+        """
+        line = line.strip()
+
+        if not line:
+            return None
+
+        # Remove one or more leading timestamps.
+        while True:
+            timestamp_match = re.match(
+                r"\[\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+                r"(?:\s*→\s*\d{2}:\d{2}:\d{2}(?:\.\d+)?)?\]\s*",
+                line,
+            )
+
+            if not timestamp_match:
+                break
+
+            line = line[timestamp_match.end():].strip()
+
+        # Match speaker labels after optional timestamp removal.
+        speaker_match = re.match(r"^\[?([^\]:]+)\]?:\s*", line)
+
+        if not speaker_match:
+            return None
+
+        speaker = speaker_match.group(1).strip()
+
+        # Avoid accidentally treating timestamps or empty labels as speakers.
+        if not speaker:
+            return None
+
+        if re.match(r"^\d{2}:\d{2}:\d{2}", speaker):
+            return None
+
+        return speaker
+
+    def _collect_speaker_labels(self, input_path: str) -> list[str]:
+        """Collect unique speaker labels from a selected .txt file or folder."""
+        speakers = set()
+
+        if os.path.isfile(input_path):
+            files = [input_path]
+        elif os.path.isdir(input_path):
+            files = [
+                os.path.join(input_path, fn)
+                for fn in os.listdir(input_path)
+                if fn.lower().endswith(".txt")
+            ]
+        else:
+            return []
+
+        for file_path in files:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        speaker = self._extract_speaker_from_line(line)
+                        if speaker:
+                            speakers.add(speaker)
+            except Exception as e:
+                self._append_log(
+                    f"[warn] Could not scan speakers from {os.path.basename(file_path)}: {e}",
+                    "#eab308",
+                )
+
+        return sorted(speakers)
+
+    def _refresh_speaker_dropdown(self) -> None:
+        """Populate the interviewer dropdown using speaker labels found in the selected input."""
+        input_path = self._input_edit.text().strip()
+
+        current_value = self._speaker_combo.currentData()
+
+        self._speaker_combo.clear()
+        self._speaker_combo.addItem("None — include all speakers", None)
+
+        if not input_path or not os.path.exists(input_path):
+            return
+
+        speakers = self._collect_speaker_labels(input_path)
+
+        for speaker in speakers:
+            self._speaker_combo.addItem(speaker, speaker)
+
+        # Restore previous selection if it still exists.
+        if current_value:
+            index = self._speaker_combo.findData(current_value)
+            if index >= 0:
+                self._speaker_combo.setCurrentIndex(index)
+
+        if speakers:
+            self._append_log(
+                f"[info] Found speaker labels: {', '.join(speakers)}",
+                "#64748b",
+            )
+        else:
+            self._append_log(
+                "[warn] No speaker labels found. You can still run topic modeling with all speakers included.",
+                "#eab308",
+            )
 
     def _open_output_folder(self) -> None:
         from PySide6.QtGui import QDesktopServices
@@ -301,7 +421,7 @@ class TopicModelingPage(QFrame):
         python = _resolve_python()
         args = [_PIPELINE_SCRIPT, input_path]
 
-        speaker = self._speaker_edit.text().strip()
+        speaker = self._speaker_combo.currentData()
         if speaker:
             args.append(speaker)
 
@@ -793,8 +913,6 @@ class TopicModelingPage(QFrame):
             lay.addWidget(examples_widget)
 
             if len(examples) > 3:
-                hidden_count = len(examples) - 3
-
                 show_more_btn = QPushButton(f"Show more ({len(examples) - 3})")
                 show_more_btn.setObjectName("show-more-btn")
                 show_more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
