@@ -118,7 +118,7 @@ def save_model(topic_model, original_name):
     return model_path
 
 # build structured summary for each topic
-def build_topic_summary(topic_model, df, topics, max_keywords=8, max_examples=3):
+def build_topic_summary(topic_model, df, topics, max_keywords=8, max_examples=10):
     df = df.copy()
     df["topic"] = topics
 
@@ -140,14 +140,24 @@ def build_topic_summary(topic_model, df, topics, max_keywords=8, max_examples=3)
             continue
 
         example_rows = topic_rows.head(max_examples)
-        examples = example_rows["cleaned_text"].tolist()
+
+        example_segments = []
+        for _, row in example_rows.iterrows():
+            example_segments.append({
+                "segment_id": int(row["segment_id"]) if "segment_id" in row and pd.notna(row["segment_id"]) else None,
+                "text": row["cleaned_text"],
+                "source_file": row["source_file"] if "source_file" in row else None,
+                "speaker": row["speaker"] if "speaker" in row else None,
+                "topic": int(topic_id)
+            })
 
         summary.append({
             "topic_id": int(topic_id),
             "generated_label": None,
             "keywords": keywords,
-            "examples": examples,
-            "source_files": example_rows["source_file"].tolist() if "source_file" in example_rows.columns else [],
+            "examples": [ex["text"] for ex in example_segments],  # keep old format too
+            "example_segments": example_segments,
+            "source_files": [ex["source_file"] for ex in example_segments],
             "segment_count": int(len(topic_rows))
         })
 

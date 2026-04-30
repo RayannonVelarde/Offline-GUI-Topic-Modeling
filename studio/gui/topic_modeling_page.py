@@ -7,24 +7,27 @@ Wraps Rayannon's pipeline (topic_modeling/src/pipeline.py) so users can:
   3. Optionally enable Ollama LLM labeling and choose the model name.
   4. Run the full pipeline (preprocess → BERTopic) in a subprocess.
   5. View the live log output and the resulting topic summary JSON.
+  6. Show more excerpts for each topic.
+  7. Click excerpts to open the original transcript and highlight the matching text.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
-from PySide6.QtCore import Qt, QProcess, QSize, QTimer
+from PySide6.QtCore import Qt, QProcess, QTimer
 from PySide6.QtGui import QColor, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -119,7 +122,7 @@ class TopicModelingPage(QFrame):
         self._speaker_edit = QLineEdit()
         self._speaker_edit.setObjectName("settings-input")
         self._speaker_edit.setPlaceholderText(
-            "e.g. SPEAKER_00  (leave blank to include all speakers)"
+            "e.g. Interviewer or SPEAKER_00  (leave blank to include all speakers)"
         )
         spk_row.addWidget(spk_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         spk_row.addWidget(self._speaker_edit, 1)
@@ -428,6 +431,289 @@ class TopicModelingPage(QFrame):
 
         self._results_inner_lay.addStretch(1)
 
+    # ── Transcript click-through helpers ──────────────────────────────────
+
+    def _find_transcript_path_for_excerpt(self, source_file: str | None) -> str | None:
+        """
+        Find the original transcript file based on the GUI input path and source_file saved
+        in the topic summary JSON.
+        """
+        input_path = self._input_edit.text().strip()
+
+        if not input_path:
+            return None
+
+        # If user selected one transcript file, use it directly.
+        if os.path.isfile(input_path):
+            return input_path
+
+        # If user selected a folder, use the source_file stored in the JSON.
+        if os.path.isdir(input_path) and source_file:
+            candidate = os.path.join(input_path, source_file)
+            if os.path.isfile(candidate):
+                return candidate
+
+        return None
+
+    def _extract_searchable_text_with_map(
+        self,
+        raw_line: str,
+        display_offset: int,
+    ) -> tuple[str, list[int]]:
+        """
+        Build a cleaned/searchable version of one transcript line while keeping a
+        character-level map back to the raw displayed transcript.
+
+        This lets us display speaker labels and timestamps, but still highlight
+        the excerpt based on cleaned text.
+        """
+        line = raw_line.rstrip("\n")
+
+        if not line:
+            return "", []
+
+        chars: list[str] = []
+        mapping: list[int] = []
+
+        i = 0
+
+        # Remove leading timestamps like:
+        # [00:00:02.039 → 00:00:17.412]
+        # [00:00:02.039]
+        while True:
+            timestamp_match = re.match(
+                r"\[\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+                r"(?:\s*→\s*\d{2}:\d{2}:\d{2}(?:\.\d+)?)?\]\s*",
+                line[i:],
+            )
+
+            if not timestamp_match:
+                break
+
+            i += timestamp_match.end()
+
+        # Remove leading speaker label like:
+        # [SPEAKER_00]:
+        # SPEAKER_00:
+        # Interviewer:
+        speaker_match = re.match(r"\s*\[?[^\]:]+\]?:\s*", line[i:])
+        if speaker_match:
+            i += speaker_match.end()
+
+        # Walk through the rest of the line and skip inline timestamps too.
+        while i < len(line):
+            timestamp_match = re.match(
+                r"\[\d{2}:\d{2}:\d{2}(?:\.\d+)?"
+                r"(?:\s*→\s*\d{2}:\d{2}:\d{2}(?:\.\d+)?)?\]\s*",
+                line[i:],
+            )
+
+            if timestamp_match:
+                i += timestamp_match.end()
+                continue
+
+            chars.append(line[i])
+            mapping.append(display_offset + i)
+            i += 1
+
+        # Trim leading/trailing whitespace while keeping map aligned.
+        start = 0
+        end = len(chars)
+
+        while start < end and chars[start].isspace():
+            start += 1
+
+        while end > start and chars[end - 1].isspace():
+            end -= 1
+
+        cleaned_text = "".join(chars[start:end])
+        cleaned_map = mapping[start:end]
+
+        return cleaned_text, cleaned_map
+
+    def _build_transcript_view_data(
+        self,
+        raw_lines: list[str],
+    ) -> tuple[str, str, list[int]]:
+        """
+        Returns:
+          - display_text: raw transcript shown to the user with labels/timestamps
+          - search_text: cleaned text used for matching
+          - search_to_display: maps each char in search_text back to display_text
+        """
+        display_text = "".join(raw_lines)
+
+        search_parts: list[str] = []
+        search_to_display: list[int] = []
+
+        display_offset = 0
+
+        for idx, raw_line in enumerate(raw_lines):
+            cleaned_text, cleaned_map = self._extract_searchable_text_with_map(
+                raw_line,
+                display_offset,
+            )
+
+            if cleaned_text:
+                search_parts.append(cleaned_text)
+                search_to_display.extend(cleaned_map)
+
+                # Add a newline between searchable lines so multi-line excerpts still match.
+                if idx < len(raw_lines) - 1:
+                    search_parts.append("\n")
+
+                    # Map the searchable newline to the end of this raw display line.
+                    newline_display_pos = display_offset + len(raw_line.rstrip("\n"))
+                    search_to_display.append(newline_display_pos)
+
+            display_offset += len(raw_line)
+
+        search_text = "".join(search_parts)
+
+        return display_text, search_text, search_to_display
+
+    def _find_normalized_span(
+        self,
+        display_text: str,
+        excerpt: str,
+    ) -> tuple[int, int] | None:
+        """
+        Find excerpt inside display_text while treating newlines/multiple spaces as normal spaces.
+        Returns character start/end positions in display_text.
+        """
+        target = " ".join(excerpt.split()).lower()
+
+        if not target:
+            return None
+
+        normalized_chars = []
+        index_map = []
+        previous_was_space = False
+
+        for original_index, char in enumerate(display_text):
+            if char.isspace():
+                if not previous_was_space:
+                    normalized_chars.append(" ")
+                    index_map.append(original_index)
+                    previous_was_space = True
+            else:
+                normalized_chars.append(char.lower())
+                index_map.append(original_index)
+                previous_was_space = False
+
+        normalized_text = "".join(normalized_chars)
+        start_norm = normalized_text.find(target)
+
+        # If the full excerpt does not match, try matching the first chunk.
+        if start_norm == -1 and len(target) > 120:
+            target = target[:120]
+            start_norm = normalized_text.find(target)
+
+        if start_norm == -1:
+            return None
+
+        end_norm = start_norm + len(target) - 1
+
+        if start_norm >= len(index_map) or end_norm >= len(index_map):
+            return None
+
+        start_original = index_map[start_norm]
+        end_original = index_map[end_norm] + 1
+
+        return start_original, end_original
+
+    def _open_excerpt_in_transcript(
+        self,
+        excerpt: str,
+        source_file: str | None = None,
+    ) -> None:
+        """
+        Open a transcript viewer dialog and highlight the clicked excerpt.
+
+        The popup shows the raw transcript with speaker labels and timestamps,
+        but matching is done against a cleaned hidden version.
+        """
+        transcript_path = self._find_transcript_path_for_excerpt(source_file)
+
+        if not transcript_path:
+            self._append_log(
+                "[error] Could not find the original transcript file for this excerpt.",
+                "#ef4444",
+            )
+            return
+
+        try:
+            with open(transcript_path, "r", encoding="utf-8") as f:
+                raw_lines = f.readlines()
+        except Exception as e:
+            self._append_log(f"[error] Could not open transcript: {e}", "#ef4444")
+            return
+
+        display_text, search_text, search_to_display = self._build_transcript_view_data(
+            raw_lines
+        )
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Transcript excerpt — {os.path.basename(transcript_path)}")
+        dialog.setMinimumSize(900, 650)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel(os.path.basename(transcript_path))
+        title.setObjectName("section-title")
+        layout.addWidget(title)
+
+        transcript_view = QTextEdit()
+        transcript_view.setReadOnly(True)
+        transcript_view.setPlainText(display_text)
+        transcript_view.setObjectName("home-file-log")
+        layout.addWidget(transcript_view, 1)
+
+        close_row = QHBoxLayout()
+        close_row.addStretch(1)
+
+        close_btn = QPushButton("Close")
+        close_btn.setObjectName("add-btn")
+        close_btn.clicked.connect(dialog.close)
+        close_row.addWidget(close_btn)
+
+        layout.addLayout(close_row)
+
+        span = self._find_normalized_span(search_text, excerpt)
+
+        if span and search_to_display:
+            start_search, end_search = span
+
+            if (
+                start_search < len(search_to_display)
+                and (end_search - 1) < len(search_to_display)
+            ):
+                start_display = search_to_display[start_search]
+                end_display = search_to_display[end_search - 1] + 1
+
+                cursor = transcript_view.textCursor()
+                cursor.setPosition(start_display)
+                cursor.setPosition(end_display, QTextCursor.MoveMode.KeepAnchor)
+
+                transcript_view.setTextCursor(cursor)
+                transcript_view.ensureCursorVisible()
+            else:
+                self._append_log(
+                    "[warn] Transcript opened, but the highlight mapping was out of range.",
+                    "#eab308",
+                )
+        else:
+            self._append_log(
+                "[warn] Transcript opened, but the exact excerpt could not be highlighted.",
+                "#eab308",
+            )
+
+        dialog.exec()
+
+    # ── Topic card rendering ──────────────────────────────────────────────
+
     def _make_topic_card(self, entry: dict) -> QFrame:
         """Build one compact card for a single BERTopic result entry."""
         card = QFrame()
@@ -442,6 +728,7 @@ class TopicModelingPage(QFrame):
         count = entry.get("segment_count", 0)
         keywords = entry.get("keywords", [])
         examples = entry.get("examples", [])
+        source_files = entry.get("source_files", [])
 
         # Header row: topic ID + label + segment count badge
         header_row = QHBoxLayout()
@@ -477,12 +764,73 @@ class TopicModelingPage(QFrame):
             examples_widget = QWidget()
             examples_lay = QVBoxLayout(examples_widget)
             examples_lay.setContentsMargins(0, 0, 0, 0)
-            examples_lay.setSpacing(4)
-            for ex in examples[:3]:
-                ex_lbl = QLabel(f'"{ex[:160]}{"…" if len(ex) > 160 else ""}"')
+            examples_lay.setSpacing(6)
+
+            excerpt_labels = []
+
+            for i, ex in enumerate(examples):
+                ex_text = f'"{ex[:220]}{"…" if len(ex) > 220 else ""}"'
+
+                ex_lbl = QLabel(ex_text)
                 ex_lbl.setObjectName("settings-hint")
                 ex_lbl.setWordWrap(True)
+                ex_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+
+                source_file = source_files[i] if i < len(source_files) else None
+
+                def open_this_excerpt(event, excerpt=ex, src=source_file):
+                    self._open_excerpt_in_transcript(excerpt, src)
+
+                ex_lbl.mousePressEvent = open_this_excerpt
+
+                # Only show first 3 at first.
+                if i >= 3:
+                    ex_lbl.setVisible(False)
+
+                excerpt_labels.append(ex_lbl)
                 examples_lay.addWidget(ex_lbl)
+
             lay.addWidget(examples_widget)
+
+            if len(examples) > 3:
+                hidden_count = len(examples) - 3
+
+                show_more_btn = QPushButton(f"Show more ({len(examples) - 3})")
+                show_more_btn.setObjectName("show-more-btn")
+                show_more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                show_more_btn.setFlat(True)
+                show_more_btn.setFixedWidth(135)
+                show_more_btn.setStyleSheet(
+                    """
+                    QPushButton#show-more-btn {
+                        background: transparent;
+                        border: none;
+                        color: #7f8ea3;
+                        font-size: 12px;
+                        font-weight: 500;
+                        padding: 2px 0px;
+                        text-align: left;
+                    }
+
+                    QPushButton#show-more-btn:hover {
+                        color: #9fb3cc;
+                        text-decoration: underline;
+                    }
+                    """
+                )
+
+                def toggle_excerpts():
+                    showing_more = not excerpt_labels[3].isVisible()
+
+                    for lbl in excerpt_labels[3:]:
+                        lbl.setVisible(showing_more)
+
+                    if showing_more:
+                        show_more_btn.setText("Show less")
+                    else:
+                        show_more_btn.setText(f"Show more ({len(examples) - 3})")
+
+                show_more_btn.clicked.connect(toggle_excerpts)
+                lay.addWidget(show_more_btn, 0, Qt.AlignmentFlag.AlignLeft)
 
         return card

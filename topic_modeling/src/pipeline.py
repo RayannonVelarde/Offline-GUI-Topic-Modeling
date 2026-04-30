@@ -9,7 +9,7 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     input_path = Path(input_path)
 
     # run preprocessing
-    preprocess_cmd = [sys.executable, "preprocess.py", str(input_path)]
+    preprocess_cmd = ["python", "preprocess.py", str(input_path)]
     if interviewer_speaker:
         preprocess_cmd.append(interviewer_speaker)
 
@@ -31,7 +31,7 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     topic_summary_json = f"../output/{original_name}_topic_summary.json"
     
     # run topic modeling
-    topic_cmd = [sys.executable, "topic_modeling.py", preprocessed_csv]
+    topic_cmd = ["python", "topic_modeling.py", preprocessed_csv]
     if use_labeling:
         topic_cmd.extend(["--label", ollama_model])
 
