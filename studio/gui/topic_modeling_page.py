@@ -320,7 +320,7 @@ class TopicModelingPage(QFrame):
             return
 
         self._input_edit.setText(path)
-        self._refresh_speaker_dropdown()
+        self._on_input_path_committed()
         self._append_log(
             f"[info] Loaded transcript for topic modeling: {os.path.basename(path)}",
             "#64748b",
@@ -366,6 +366,12 @@ class TopicModelingPage(QFrame):
         self._last_transcript_path = path
         self._refresh_speaker_dropdown()
         self._refresh_ai_transcript_context(path)
+        if path and os.path.exists(path):
+            self._load_results_for_input(path, warn_if_missing=False)
+        else:
+            self._topics_context = ""
+            self._push_ai_context()
+            self._clear_results()
 
     def _extract_speaker_from_line(self, line: str) -> str | None:
         """
@@ -678,8 +684,63 @@ class TopicModelingPage(QFrame):
                 item.widget().deleteLater()
         self._add_empty_results_placeholder()
 
+    def _output_stem_for_input(self, input_path: str) -> str | None:
+        """Return the output filename stem used by the topic modeling pipeline."""
+        if os.path.isfile(input_path):
+            return os.path.splitext(os.path.basename(input_path))[0]
+        if os.path.isdir(input_path):
+            return os.path.basename(os.path.normpath(input_path))
+        return None
+
+    def _summary_path_for_input(self, input_path: str) -> str | None:
+        stem = self._output_stem_for_input(input_path)
+        if not stem:
+            return None
+        return os.path.join(_OUTPUT_DIR, f"{stem}_topic_summary.json")
+
+    def _load_summary_file(self, path: str) -> bool:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                summary = json.load(f)
+        except Exception as e:
+            self._append_log(f"[error] Could not read results: {e}", "#ef4444")
+            QMessageBox.warning(self, "Topic Modeling", f"Could not read results:\n{e}")
+            return False
+        self._render_results(summary, path)
+        self._feed_results_to_ai(summary)
+        return True
+
+    def _load_results_for_input(self, input_path: str, warn_if_missing: bool) -> bool:
+        """Load the existing summary JSON that corresponds to the selected input."""
+        summary_path = self._summary_path_for_input(input_path)
+        if summary_path and os.path.isfile(summary_path):
+            self._append_log(
+                f"[info] Loaded topic results: {os.path.basename(summary_path)}",
+                "#64748b",
+            )
+            return self._load_summary_file(summary_path)
+
+        self._clear_results()
+        self._topics_context = ""
+        self._push_ai_context()
+
+        if warn_if_missing:
+            expected = summary_path or _OUTPUT_DIR
+            QMessageBox.warning(
+                self,
+                "Topic Modeling",
+                "Pipeline finished but no topic summary JSON was found for the selected input.\n"
+                f"Expected:\n{expected}",
+            )
+        return False
+
     def _load_latest_results(self) -> None:
-        """Find the most recently written *_topic_summary.json and render it."""
+        """Load topic results for the selected input, falling back to newest summary."""
+        input_path = self._input_edit.text().strip()
+        if input_path and os.path.exists(input_path):
+            self._load_results_for_input(input_path, warn_if_missing=True)
+            return
+
         out_dir = _OUTPUT_DIR
         if not os.path.isdir(out_dir):
             return
@@ -700,15 +761,7 @@ class TopicModelingPage(QFrame):
             return
         candidates.sort(key=os.path.getmtime, reverse=True)
         latest = candidates[0]
-        try:
-            with open(latest, "r", encoding="utf-8") as f:
-                summary = json.load(f)
-        except Exception as e:
-            self._append_log(f"[error] Could not read results: {e}", "#ef4444")
-            QMessageBox.warning(self, "Topic Modeling", f"Could not read results:\n{e}")
-            return
-        self._render_results(summary, latest)
-        self._feed_results_to_ai(summary)
+        self._load_summary_file(latest)
 
     def _feed_results_to_ai(self, summary: list[dict]) -> None:
         """Format topic results as readable context and pass them to the AI panel."""
