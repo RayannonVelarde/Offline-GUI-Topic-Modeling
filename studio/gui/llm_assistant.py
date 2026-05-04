@@ -503,6 +503,11 @@ class LLMAssistantPanel(QFrame):
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    def prefill_input(self, text: str) -> None:
+        """Pre-fill the chat input with `text` and give it keyboard focus."""
+        self._input.setPlainText(text)
+        self._input.setFocus()
+
     def set_context(self, context_text: str):
         """Feed context (e.g. topic JSON or transcript) that will be injected into every conversation."""
         self._context = (context_text or "").strip()

@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QSplitter,
     QTextEdit,
     QToolButton,
@@ -104,6 +105,10 @@ class TopicModelingPage(QFrame):
         self._spinner_timer: QTimer | None = None
         self._elapsed_timer: QTimer | None = None
 
+        # ── Results state ─────────────────────────────────────────────────
+        self._current_summary: list[dict] = []
+        self._current_source_path: str = ""
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(16)
@@ -120,16 +125,34 @@ class TopicModelingPage(QFrame):
         outer.addWidget(subtitle)
         outer.addSpacing(6)
 
-        # ── Pipeline options (same card pattern as Review selector row) ───
+        # ── Pipeline options — collapsible card ──────────────────────────
         options_card = QFrame()
         options_card.setObjectName("settings-card")
         options_lay = QVBoxLayout(options_card)
-        options_lay.setContentsMargins(14, 12, 14, 12)
-        options_lay.setSpacing(6)
+        options_lay.setContentsMargins(14, 10, 14, 10)
+        options_lay.setSpacing(0)
 
+        # Clickable header row with chevron
+        opts_hdr = QHBoxLayout()
+        opts_hdr.setSpacing(8)
         section_lbl = QLabel("Pipeline options")
         section_lbl.setObjectName("section-title")
-        options_lay.addWidget(section_lbl)
+        opts_hdr.addWidget(section_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
+        self._options_chevron = QToolButton()
+        self._options_chevron.setObjectName("settings-chevron-btn")
+        self._options_chevron.setText("▾")
+        self._options_chevron.setAutoRaise(True)
+        self._options_chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._options_chevron.clicked.connect(self._toggle_options_panel)
+        opts_hdr.addWidget(self._options_chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+        options_lay.addLayout(opts_hdr)
+
+        # Body — hidden after Run is clicked
+        self._options_body = QFrame()
+        self._options_body.setObjectName("topics-options-body")
+        body_lay = QVBoxLayout(self._options_body)
+        body_lay.setContentsMargins(0, 8, 0, 2)
+        body_lay.setSpacing(6)
 
         # Input path row
         input_row = QHBoxLayout()
@@ -141,7 +164,6 @@ class TopicModelingPage(QFrame):
         self._input_edit.setObjectName("settings-input")
         self._input_edit.setPlaceholderText("Select a transcript file or folder…")
         self._input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        # Manual edits should also pick up speaker labels and feed the AI panel.
         self._input_edit.editingFinished.connect(self._on_input_path_committed)
         browse_file_btn = QPushButton("File…")
         browse_file_btn.setObjectName("add-btn")
@@ -153,7 +175,7 @@ class TopicModelingPage(QFrame):
         input_row.addWidget(self._input_edit, 1)
         input_row.addWidget(browse_file_btn, 0)
         input_row.addWidget(browse_folder_btn, 0)
-        options_lay.addLayout(input_row)
+        body_lay.addLayout(input_row)
 
         # Interviewer speaker row
         spk_row = QHBoxLayout()
@@ -161,21 +183,19 @@ class TopicModelingPage(QFrame):
         spk_lbl = QLabel("Exclude interviewer:")
         spk_lbl.setObjectName("settings-label")
         spk_lbl.setFixedWidth(_TOPICS_LABEL_W)
-
         self._speaker_combo = QComboBox()
         self._speaker_combo.setObjectName("settings-input")
         self._speaker_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._speaker_combo.addItem("None — include all speakers", None)
-
         spk_row.addWidget(spk_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         spk_row.addWidget(self._speaker_combo, 1)
-        options_lay.addLayout(spk_row)
+        body_lay.addLayout(spk_row)
 
         speaker_hint = QLabel(
             "Choose the interviewer speaker label to exclude their questions from topic modeling."
         )
         speaker_hint.setObjectName("settings-hint")
-        options_lay.addWidget(speaker_hint)
+        body_lay.addWidget(speaker_hint)
 
         # GPT4All labeling row
         gpt4all_row = QHBoxLayout()
@@ -184,7 +204,7 @@ class TopicModelingPage(QFrame):
         self._gpt4all_checkbox.toggled.connect(self._sync_gpt4all_model_enabled)
         gpt4all_row.addWidget(self._gpt4all_checkbox)
         gpt4all_row.addStretch(1)
-        options_lay.addLayout(gpt4all_row)
+        body_lay.addLayout(gpt4all_row)
 
         model_row = QHBoxLayout()
         model_row.setSpacing(10)
@@ -196,8 +216,9 @@ class TopicModelingPage(QFrame):
         self._model_edit.setEnabled(False)
         model_row.addWidget(model_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         model_row.addWidget(self._model_edit, 1)
-        options_lay.addLayout(model_row)
+        body_lay.addLayout(model_row)
 
+        options_lay.addWidget(self._options_body)
         outer.addWidget(options_card)
 
         # Primary action (same placement as Home "Start Job")
@@ -242,6 +263,54 @@ class TopicModelingPage(QFrame):
         self._open_output_btn.clicked.connect(self._open_output_folder)
         results_header.addWidget(self._open_output_btn, 0, Qt.AlignmentFlag.AlignVCenter)
         results_vlay.addLayout(results_header)
+
+        # ── Quality strip (shown when results are loaded) ──────────────────
+        self._quality_strip = QFrame()
+        self._quality_strip.setObjectName("topics-quality-strip")
+        qs_lay = QHBoxLayout(self._quality_strip)
+        qs_lay.setContentsMargins(4, 4, 4, 4)
+        qs_lay.setSpacing(16)
+        self._ql_topics = QLabel("—")
+        self._ql_topics.setObjectName("settings-label")
+        self._ql_outliers = QLabel("—")
+        self._ql_outliers.setObjectName("settings-hint")
+        self._ql_avg_size = QLabel("—")
+        self._ql_avg_size.setObjectName("settings-hint")
+        self._ql_coherence = QLabel("coherence: —")
+        self._ql_coherence.setObjectName("settings-hint")
+        for lbl in (self._ql_topics, self._ql_outliers, self._ql_avg_size, self._ql_coherence):
+            qs_lay.addWidget(lbl)
+        qs_lay.addStretch(1)
+        self._quality_strip.setVisible(False)
+        results_vlay.addWidget(self._quality_strip)
+
+        # ── Filter bar (shown when results are loaded) ─────────────────────
+        self._filter_bar = QFrame()
+        self._filter_bar.setObjectName("topics-filter-bar")
+        fb_lay = QHBoxLayout(self._filter_bar)
+        fb_lay.setContentsMargins(4, 2, 4, 2)
+        fb_lay.setSpacing(10)
+        fb_src_lbl = QLabel("Source:")
+        fb_src_lbl.setObjectName("settings-label")
+        fb_lay.addWidget(fb_src_lbl)
+        self._filter_source_combo = QComboBox()
+        self._filter_source_combo.setObjectName("settings-input")
+        self._filter_source_combo.setMinimumWidth(180)
+        self._filter_source_combo.currentIndexChanged.connect(self._apply_filters)
+        fb_lay.addWidget(self._filter_source_combo)
+        fb_min_lbl = QLabel("Min size:")
+        fb_min_lbl.setObjectName("settings-label")
+        fb_lay.addWidget(fb_min_lbl)
+        self._filter_minsize_spin = QSpinBox()
+        self._filter_minsize_spin.setObjectName("settings-input")
+        self._filter_minsize_spin.setMinimum(1)
+        self._filter_minsize_spin.setValue(1)
+        self._filter_minsize_spin.setFixedWidth(60)
+        self._filter_minsize_spin.valueChanged.connect(self._apply_filters)
+        fb_lay.addWidget(self._filter_minsize_spin)
+        fb_lay.addStretch(1)
+        self._filter_bar.setVisible(False)
+        results_vlay.addWidget(self._filter_bar)
 
         # Inset panel for scroll content (nested box inside the results card)
         results_body = QFrame()
@@ -465,6 +534,103 @@ class TopicModelingPage(QFrame):
                 time_lbl.setText(_fmt_elapsed(elapsed))
                 break
         self._stage_active_key = None
+
+    # ── Collapsible options panel ─────────────────────────────────────────
+
+    def _toggle_options_panel(self) -> None:
+        if self._options_body is None or self._options_chevron is None:
+            return
+        visible = self._options_body.isVisible()
+        self._options_body.setVisible(not visible)
+        self._options_chevron.setText("▾" if not visible else "▸")
+
+    def _collapse_options_panel(self) -> None:
+        if self._options_body and self._options_body.isVisible():
+            self._options_body.setVisible(False)
+            if self._options_chevron:
+                self._options_chevron.setText("▸")
+
+    # ── Quality strip helpers ─────────────────────────────────────────────
+
+    def _update_quality_strip(self, summary: list[dict]) -> None:
+        if self._quality_strip is None:
+            return
+        n = len(summary)
+        if n == 0:
+            self._quality_strip.setVisible(False)
+            return
+        total_segs = sum(e.get("segment_count", 0) for e in summary)
+        avg = total_segs / n if n else 0
+        self._ql_topics.setText(f"{n} topic{'s' if n != 1 else ''}")
+        self._ql_outliers.setText(f"outliers: unknown")
+        self._ql_avg_size.setText(f"avg size: {avg:.1f} segs")
+        self._ql_coherence.setText("coherence: —")
+        self._quality_strip.setVisible(True)
+
+    # ── Filter bar helpers ────────────────────────────────────────────────
+
+    def _update_filter_bar(self, summary: list[dict]) -> None:
+        if self._filter_bar is None or self._filter_source_combo is None:
+            return
+        sources: set[str] = set()
+        for entry in summary:
+            for sf in entry.get("source_files", []):
+                if sf:
+                    sources.add(sf)
+        self._filter_source_combo.blockSignals(True)
+        self._filter_source_combo.clear()
+        self._filter_source_combo.addItem("All sources", None)
+        for src in sorted(sources):
+            self._filter_source_combo.addItem(src, src)
+        self._filter_source_combo.blockSignals(False)
+        if self._filter_minsize_spin:
+            self._filter_minsize_spin.setValue(1)
+        self._filter_bar.setVisible(len(sources) > 0)
+
+    def _apply_filters(self) -> None:
+        if not self._current_summary:
+            return
+        src_filter = (
+            self._filter_source_combo.currentData()
+            if self._filter_source_combo else None
+        )
+        min_size = self._filter_minsize_spin.value() if self._filter_minsize_spin else 1
+
+        filtered = [
+            e for e in self._current_summary
+            if e.get("segment_count", 0) >= min_size
+            and (
+                src_filter is None
+                or src_filter in (e.get("source_files") or [])
+            )
+        ]
+        self._render_topic_cards(filtered, self._current_source_path)
+
+    def _render_topic_cards(self, summary: list[dict], source_path: str) -> None:
+        """Render (or re-render) only the scrollable card area; leaves quality/filter intact."""
+        while self._results_inner_lay.count() > 0:
+            item = self._results_inner_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        if not summary:
+            lbl = QLabel("No topics match the current filter.")
+            lbl.setObjectName("topics-results-empty")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setWordWrap(True)
+            lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            self._results_inner_lay.addStretch(1)
+            self._results_inner_lay.addWidget(lbl)
+            self._results_inner_lay.addStretch(1)
+            return
+
+        src_lbl = QLabel(f"Source: {os.path.basename(source_path)}")
+        src_lbl.setObjectName("settings-label")
+        self._results_inner_lay.addWidget(src_lbl)
+        for entry in summary:
+            card = self._make_topic_card(entry)
+            self._results_inner_lay.addWidget(card)
+        self._results_inner_lay.addStretch(1)
 
     def refresh_action_icons(self) -> None:
         theme = self._theme_getter() if self._theme_getter else "light"
@@ -801,6 +967,7 @@ class TopicModelingPage(QFrame):
         else:
             self._run_btn.setEnabled(False)
             self._run_btn.setText("Running…")
+            self._collapse_options_panel()
             self._show_progress_in_results(show_labeling=self._gpt4all_checkbox.isChecked())
 
     def _on_stdout(self) -> None:
@@ -845,11 +1012,16 @@ class TopicModelingPage(QFrame):
     # ── Results loading ───────────────────────────────────────────────────
 
     def _clear_results(self) -> None:
-        """Remove all dynamically added topic cards."""
+        """Remove all dynamically added topic cards and hide quality/filter."""
         while self._results_inner_lay.count() > 0:
             item = self._results_inner_lay.takeAt(0)
             if item and item.widget():
                 item.widget().deleteLater()
+        if self._quality_strip:
+            self._quality_strip.setVisible(False)
+        if self._filter_bar:
+            self._filter_bar.setVisible(False)
+        self._current_summary = []
         self._add_empty_results_placeholder()
 
     def _output_stem_for_input(self, input_path: str) -> str | None:
@@ -990,36 +1162,26 @@ class TopicModelingPage(QFrame):
         self._render_results(summary, path)
 
     def _render_results(self, summary: list[dict], source_path: str) -> None:
-        """Replace the placeholder with one card per topic."""
-        # Remove placeholder
-        while self._results_inner_lay.count() > 0:
-            item = self._results_inner_lay.takeAt(0)
-            if item and item.widget():
-                item.widget().deleteLater()
-
+        """Store summary, update quality strip + filter bar, render topic cards."""
+        self._current_summary = list(summary)
+        self._current_source_path = source_path
+        self._update_quality_strip(summary)
+        self._update_filter_bar(summary)
         if not summary:
+            while self._results_inner_lay.count() > 0:
+                item = self._results_inner_lay.takeAt(0)
+                if item and item.widget():
+                    item.widget().deleteLater()
             lbl = QLabel("No topics found in results.")
             lbl.setObjectName("topics-results-empty")
             lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             lbl.setWordWrap(True)
-            lbl.setSizePolicy(
-                QSizePolicy.Policy.Expanding,
-                QSizePolicy.Policy.Preferred,
-            )
+            lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
             self._results_inner_lay.addStretch(1)
             self._results_inner_lay.addWidget(lbl)
             self._results_inner_lay.addStretch(1)
             return
-
-        source_lbl = QLabel(f"Source: {os.path.basename(source_path)}")
-        source_lbl.setObjectName("settings-label")
-        self._results_inner_lay.addWidget(source_lbl)
-
-        for entry in summary:
-            card = self._make_topic_card(entry)
-            self._results_inner_lay.addWidget(card)
-
-        self._results_inner_lay.addStretch(1)
+        self._render_topic_cards(summary, source_path)
 
     # ── Transcript click-through helpers ──────────────────────────────────
 
