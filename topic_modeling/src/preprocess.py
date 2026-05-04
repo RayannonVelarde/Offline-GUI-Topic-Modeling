@@ -4,6 +4,8 @@ import os
 import pandas as pd
 from pathlib import Path
 
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+
 # extract timestamp and speaker label if present
 def extract_metadata(line):
     speaker = None
@@ -252,13 +254,13 @@ def preprocess_transcript(file_path, interviewer_speaker=None):
 def preprocess_input(input_path, interviewer_speaker=None):
     input_path = Path(input_path)
 
-    os.makedirs("../output", exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     all_dfs = []
 
     if input_path.is_file():
         df = preprocess_transcript(input_path, interviewer_speaker)
 
-        output_file = f"../output/{input_path.stem}.csv"
+        output_file = OUTPUT_DIR / f"{input_path.stem}.csv"
         df.to_csv(output_file, index=False)
 
         print(f"Preprocessed transcript saved to {output_file}")
@@ -279,7 +281,7 @@ def preprocess_input(input_path, interviewer_speaker=None):
         for file in files:
             df = preprocess_transcript(file, interviewer_speaker)
 
-            output_file = f"../output/{file.stem}.csv"
+            output_file = OUTPUT_DIR / f"{file.stem}.csv"
             df.to_csv(output_file, index=False)
 
             print(f"Processed {file.name}")
@@ -287,7 +289,7 @@ def preprocess_input(input_path, interviewer_speaker=None):
 
         combined_df = pd.concat(all_dfs, ignore_index=True)
         combined_df = resegment_if_too_small(combined_df)
-        combined_output = f"../output/{input_path.name}.csv"
+        combined_output = OUTPUT_DIR / f"{input_path.name}.csv"
         combined_df.to_csv(combined_output, index=False)
 
         print(f"\nCombined dataset saved to {combined_output}")

@@ -11,6 +11,8 @@ from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 from hdbscan import HDBSCAN
 from umap import UMAP
 
+OUTPUT_DIR = Path(__file__).resolve().parent.parent / "output"
+
 # load cleaned transcript data from csv
 def load_data(file_path):
     df = pd.read_csv(file_path)
@@ -104,8 +106,8 @@ def save_results(df, topics, original_name):
     df = df.copy()
     df["topic"] = topics
 
-    os.makedirs("../output", exist_ok=True)
-    output_file = f"../output/{original_name}_topic_results.csv"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_file = OUTPUT_DIR / f"{original_name}_topic_results.csv"
 
     df.to_csv(output_file, index=False)
     print(f"Topic results saved to {output_file}")
@@ -114,8 +116,8 @@ def save_results(df, topics, original_name):
 
 # save the trained BERTopic model
 def save_model(topic_model, original_name):
-    os.makedirs("../output", exist_ok=True)
-    model_path = f"../output/{original_name}_topic_model"
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    model_path = OUTPUT_DIR / f"{original_name}_topic_model"
     
     if os.path.exists(model_path):
         if os.path.isdir(model_path):
@@ -176,9 +178,9 @@ def build_topic_summary(topic_model, df, topics, max_keywords=8, max_examples=10
     
 # save topic summary to json
 def save_topic_summary(topic_summary, original_name):
-    os.makedirs("../output", exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    output_file = f"../output/{original_name}_topic_summary.json"
+    output_file = OUTPUT_DIR / f"{original_name}_topic_summary.json"
 
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(topic_summary, f, indent=2, ensure_ascii=False)

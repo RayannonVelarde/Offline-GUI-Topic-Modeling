@@ -3,40 +3,43 @@ import sys
 import subprocess
 from pathlib import Path
 
+SRC_DIR = Path(__file__).resolve().parent
+OUTPUT_DIR = SRC_DIR.parent / "output"
+
 def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollama_model="llama3.1"):
-    os.makedirs("../output", exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     input_path = Path(input_path)
 
     # run preprocessing
-    preprocess_cmd = [sys.executable, "preprocess.py", str(input_path)]
+    preprocess_cmd = [sys.executable, str(SRC_DIR / "preprocess.py"), str(input_path)]
     if interviewer_speaker:
         preprocess_cmd.append(interviewer_speaker)
 
     print("=== Running preprocessing ===")
-    subprocess.run(preprocess_cmd, check=True)
+    subprocess.run(preprocess_cmd, check=True, cwd=SRC_DIR)
 
     # determine which cleaned csv to send into topic modeling
     if input_path.is_file():
-        preprocessed_csv = f"../output/{input_path.stem}.csv"
+        preprocessed_csv = OUTPUT_DIR / f"{input_path.stem}.csv"
     elif input_path.is_dir():
-        preprocessed_csv = f"../output/{input_path.name}.csv"
+        preprocessed_csv = OUTPUT_DIR / f"{input_path.name}.csv"
     else:
         raise ValueError("Invalid input path")
 
     # build expected output names
     original_name = Path(preprocessed_csv).stem
-    topic_results_csv = f"../output/{original_name}_topic_results.csv"
-    topic_model_path = f"../output/{original_name}_topic_model"
-    topic_summary_json = f"../output/{original_name}_topic_summary.json"
+    topic_results_csv = OUTPUT_DIR / f"{original_name}_topic_results.csv"
+    topic_model_path = OUTPUT_DIR / f"{original_name}_topic_model"
+    topic_summary_json = OUTPUT_DIR / f"{original_name}_topic_summary.json"
 
     # run topic modeling
-    topic_cmd = [sys.executable, "topic_modeling.py", preprocessed_csv]
+    topic_cmd = [sys.executable, str(SRC_DIR / "topic_modeling.py"), str(preprocessed_csv)]
     if use_labeling:
         topic_cmd.extend(["--label", ollama_model])
 
     print("\n=== Running topic modeling ===")
-    subprocess.run(topic_cmd, check=True)
+    subprocess.run(topic_cmd, check=True, cwd=SRC_DIR)
 
     print("\n=== Pipeline complete ===")
     print(f"Input transcript: {input_path}")
