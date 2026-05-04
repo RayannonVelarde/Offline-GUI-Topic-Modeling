@@ -106,8 +106,11 @@ class _TopicMapWorker(QThread):
 
             n = len(embeddings)
             n_neighbors = max(2, min(15, n - 1))
+            # Spectral init requires N > k; use random init for small models
+            umap_init = "random" if n < 8 else "spectral"
             coords = UMAP(
-                n_components=2, n_neighbors=n_neighbors, random_state=42, metric="cosine"
+                n_components=2, n_neighbors=n_neighbors, random_state=42,
+                metric="cosine", init=umap_init,
             ).fit_transform(embeddings)
 
             topic_info = model.get_topic_info()
