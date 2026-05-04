@@ -246,6 +246,44 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     border-radius: 4px;
 }
 
+/* Topic page — quality strip + filter bar */
+#topics-quality-strip {
+    background: transparent;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 4px 0px;
+}
+#topics-filter-bar {
+    background: transparent;
+    padding: 4px 0px;
+}
+
+/* Topic page — map / detail panes */
+#topics-map-frame {
+    background: transparent;
+}
+#topics-detail-pane {
+    background: transparent;
+    border-left: 1px solid #e2e8f0;
+}
+#topics-map-canvas {
+    background: transparent;
+}
+
+/* Ask AI button (smaller than add-btn) */
+QPushButton#topics-ask-ai-btn {
+    background-color: transparent;
+    border: 1.5px solid #2563eb;
+    border-radius: 6px;
+    color: #2563eb;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#topics-ask-ai-btn:hover {
+    background-color: #eff6ff;
+    color: #1d4ed8;
+}
+
 /* ── Review ── */
 #review-page QWidget {
     background-color: transparent;
@@ -845,6 +883,44 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 #topics-page QToolButton#review-open-folder-btn:hover {
     background-color: rgba(255, 255, 255, 0.07);
     border-radius: 4px;
+}
+
+/* Topic page — quality strip + filter bar (dark) */
+#topics-quality-strip {
+    background: transparent;
+    border-bottom: 1px solid #1e2433;
+    padding: 4px 0px;
+}
+#topics-filter-bar {
+    background: transparent;
+    padding: 4px 0px;
+}
+
+/* Topic page — map / detail panes (dark) */
+#topics-map-frame {
+    background: transparent;
+}
+#topics-detail-pane {
+    background: transparent;
+    border-left: 1px solid #1e2433;
+}
+#topics-map-canvas {
+    background: transparent;
+}
+
+/* Ask AI button (dark) */
+QPushButton#topics-ask-ai-btn {
+    background-color: transparent;
+    border: 1.5px solid #3b82f6;
+    border-radius: 6px;
+    color: #3b82f6;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#topics-ask-ai-btn:hover {
+    background-color: #1e2d4a;
+    color: #60a5fa;
 }
 
 /* ── Review ── */

@@ -19,7 +19,8 @@ import re
 import sys
 import time
 
-from PySide6.QtCore import Qt, QProcess, QTimer, QSize
+from PySide6.QtCore import Qt, QProcess, QThread, QTimer, QSize
+from PySide6.QtCore import Signal
 from PySide6.QtGui import QShowEvent, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -79,6 +80,70 @@ def _resolve_python() -> str:
     return sys.executable
 
 
+class _TopicMapWorker(QThread):
+    """Background thread: loads BERTopic model, runs 2-D UMAP, emits topic coords + weights."""
+
+    map_ready = Signal(list)
+    map_failed = Signal(str)
+
+    def __init__(self, model_path: str, summary: list[dict], parent=None):
+        super().__init__(parent)
+        self._model_path = model_path
+        self._summary = summary
+
+    def run(self) -> None:
+        try:
+            from bertopic import BERTopic
+            from umap import UMAP
+            import numpy as np
+
+            model = BERTopic.load(self._model_path, embedding_model=False)
+            embeddings = getattr(model, "topic_embeddings_", None)
+            if embeddings is None:
+                raise ValueError("topic_embeddings_ not present on loaded model")
+            if len(embeddings) < 2:
+                raise ValueError(f"Only {len(embeddings)} topic embedding(s) — need at least 2")
+
+            n = len(embeddings)
+            n_neighbors = max(2, min(15, n - 1))
+            coords = UMAP(
+                n_components=2, n_neighbors=n_neighbors, random_state=42, metric="cosine"
+            ).fit_transform(embeddings)
+
+            topic_info = model.get_topic_info()
+            topic_ids = list(topic_info["Topic"])
+
+            kw_weights: dict[int, list] = {}
+            for tid in topic_ids:
+                if tid != -1:
+                    kw_weights[tid] = model.get_topic(tid) or []
+
+            summary_by_id = {e["topic_id"]: e for e in self._summary}
+            results = []
+            for i, tid in enumerate(topic_ids):
+                if tid == -1:
+                    continue
+                entry = summary_by_id.get(int(tid), {})
+                results.append({
+                    "topic_id": int(tid),
+                    "x": float(coords[i, 0]),
+                    "y": float(coords[i, 1]),
+                    "count": entry.get("segment_count", 1),
+                    "label": entry.get("generated_label") or "",
+                    "keywords": entry.get("keywords", []),
+                    "keyword_weights": kw_weights.get(int(tid), []),
+                    "examples": entry.get("examples", []),
+                    "source_files": entry.get("source_files", []),
+                })
+            self.map_ready.emit(results)
+
+        except Exception as exc:
+            import traceback
+            print(f"[map-worker] {exc}", file=sys.stderr, flush=True)
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+            self.map_failed.emit(str(exc))
+
+
 class TopicModelingPage(QFrame):
     """Full topic-modeling pipeline control page."""
 
@@ -108,6 +173,18 @@ class TopicModelingPage(QFrame):
         # ── Results state ─────────────────────────────────────────────────
         self._current_summary: list[dict] = []
         self._current_source_path: str = ""
+
+        # ── Dual-pane map state ───────────────────────────────────────────
+        self._map_topic_data: list[dict] = []
+        self._selected_topic_idx: int = 0
+        self._map_worker: _TopicMapWorker | None = None
+        self._map_fig = None
+        self._map_ax = None
+        self._map_canvas = None
+        self._map_frame_lay: QVBoxLayout | None = None
+        self._detail_inner_lay: QVBoxLayout | None = None
+        self._inner_splitter: QSplitter | None = None
+        self._detail_splitter_set: bool = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -338,6 +415,41 @@ class TopicModelingPage(QFrame):
         self._add_empty_results_placeholder()
         self._results_scroll.setWidget(self._results_inner)
         results_body_lay.addWidget(self._results_scroll, 1)
+
+        # ── Inner splitter: map (left) | detail (right) — shown when results load ──
+        self._inner_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._inner_splitter.setChildrenCollapsible(False)
+        self._inner_splitter.setHandleWidth(6)
+        self._inner_splitter.setVisible(False)
+
+        map_frame = QFrame()
+        map_frame.setObjectName("topics-map-frame")
+        self._map_frame_lay = QVBoxLayout(map_frame)
+        self._map_frame_lay.setContentsMargins(0, 0, 0, 0)
+        self._map_frame_lay.setSpacing(0)
+
+        detail_frame = QFrame()
+        detail_frame.setObjectName("topics-detail-pane")
+        detail_frame_lay = QVBoxLayout(detail_frame)
+        detail_frame_lay.setContentsMargins(0, 0, 0, 0)
+        detail_frame_lay.setSpacing(0)
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        detail_inner = QWidget()
+        self._detail_inner_lay = QVBoxLayout(detail_inner)
+        self._detail_inner_lay.setContentsMargins(12, 8, 12, 12)
+        self._detail_inner_lay.setSpacing(10)
+        self._detail_inner_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
+        detail_scroll.setWidget(detail_inner)
+        detail_frame_lay.addWidget(detail_scroll, 1)
+
+        self._inner_splitter.addWidget(map_frame)
+        self._inner_splitter.addWidget(detail_frame)
+        self._inner_splitter.setStretchFactor(0, 1)
+        self._inner_splitter.setStretchFactor(1, 1)
+
+        results_body_lay.addWidget(self._inner_splitter, 1)
         results_vlay.addWidget(results_body, 1)
 
         # AI Assistant panel (third pane)
@@ -604,7 +716,11 @@ class TopicModelingPage(QFrame):
                 or src_filter in (e.get("source_files") or [])
             )
         ]
-        self._render_topic_cards(filtered, self._current_source_path)
+        # Dual-pane view: update map + detail; fallback to card list when splitter not visible
+        if self._inner_splitter and self._inner_splitter.isVisible():
+            self._redraw_map_for_filter(filtered)
+        else:
+            self._render_topic_cards(filtered, self._current_source_path)
 
     def _render_topic_cards(self, summary: list[dict], source_path: str) -> None:
         """Render (or re-render) only the scrollable card area; leaves quality/filter intact."""
@@ -632,6 +748,390 @@ class TopicModelingPage(QFrame):
             self._results_inner_lay.addWidget(card)
         self._results_inner_lay.addStretch(1)
 
+    # ── Dual-pane map view ────────────────────────────────────────────────
+
+    def _launch_results_view(self, summary: list[dict]) -> None:
+        """Switch the results area from scroll/card view to the map + detail split."""
+        if not summary or self._inner_splitter is None:
+            return
+        self._results_scroll.setVisible(False)
+        self._inner_splitter.setVisible(True)
+        if not self._detail_splitter_set:
+            QTimer.singleShot(0, self._set_inner_split)
+        self._show_map_loading()
+        self._on_topic_selected(0)
+        self._launch_map_worker(summary)
+
+    def _set_inner_split(self) -> None:
+        sp = self._inner_splitter
+        if sp is None or self._detail_splitter_set:
+            return
+        total = sp.width()
+        if total < 48:
+            QTimer.singleShot(0, self._set_inner_split)
+            return
+        gap = sp.handleWidth()
+        inner = total - gap
+        left = int(inner * 0.45)
+        sp.setSizes([left, inner - left])
+        self._detail_splitter_set = True
+
+    def _show_map_loading(self) -> None:
+        if self._map_frame_lay is None:
+            return
+        while self._map_frame_lay.count() > 0:
+            item = self._map_frame_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        lbl = QLabel("Computing topic map…")
+        lbl.setObjectName("topics-results-empty")
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._map_frame_lay.addWidget(lbl)
+
+    def _launch_map_worker(self, summary: list[dict]) -> None:
+        if self._map_worker and self._map_worker.isRunning():
+            return
+        input_path = self._input_edit.text().strip()
+        stem = self._output_stem_for_input(input_path) if input_path else None
+        if not stem:
+            self._on_map_failed("Could not determine model path from input selection")
+            return
+        model_path = os.path.join(_OUTPUT_DIR, f"{stem}_topic_model")
+        if not os.path.exists(model_path):
+            self._on_map_failed(f"Saved model not found at {model_path}")
+            return
+        self._map_worker = _TopicMapWorker(model_path, summary, parent=self)
+        self._map_worker.map_ready.connect(self._on_map_ready)
+        self._map_worker.map_failed.connect(self._on_map_failed)
+        self._map_worker.start()
+
+    def _on_map_ready(self, topic_data: list[dict]) -> None:
+        self._map_topic_data = topic_data
+        self._map_worker = None
+        self._draw_scatter_map(topic_data, selected_idx=self._selected_topic_idx)
+        self._on_topic_selected(self._selected_topic_idx)
+
+    def _on_map_failed(self, error_msg: str) -> None:
+        print(f"[map-worker] degrading to fallback: {error_msg}", file=sys.stderr, flush=True)
+        self._map_worker = None
+        self._map_topic_data = []
+        self._draw_fallback_map(self._current_summary)
+
+    def _draw_scatter_map(self, topic_data: list[dict], selected_idx: int = 0) -> None:
+        if self._map_frame_lay is None:
+            return
+        try:
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+            from matplotlib.figure import Figure
+        except ImportError as exc:
+            print(f"[map] matplotlib unavailable: {exc}", file=sys.stderr, flush=True)
+            self._draw_fallback_map(self._current_summary)
+            return
+
+        while self._map_frame_lay.count() > 0:
+            item = self._map_frame_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._map_fig = None
+        self._map_ax = None
+        self._map_canvas = None
+
+        theme = self._theme_getter() if self._theme_getter else "light"
+        dark = theme == "dark"
+        bg = "#141720" if dark else "#f8fafc"
+        fg = "#94a3b8" if dark else "#64748b"
+
+        _PALETTE = [
+            "#4c78a8", "#f58518", "#e45756", "#72b7b2", "#54a24b",
+            "#eeca3b", "#b279a2", "#ff9da6", "#9d755d", "#bab0ac",
+        ]
+
+        fig = Figure(facecolor=bg, tight_layout=True)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+        ax.axis("off")
+
+        for i, d in enumerate(topic_data):
+            size = max(60, min(800, d["count"] * 30))
+            col = _PALETTE[i % len(_PALETTE)]
+            is_sel = (i == selected_idx)
+            ax.scatter(
+                d["x"], d["y"], s=size, c=col,
+                alpha=1.0 if is_sel else 0.65,
+                linewidths=2.5 if is_sel else 0,
+                edgecolors="#ffffff" if is_sel else "none",
+                zorder=2,
+            )
+            short_label = str(d["topic_id"])
+            if d.get("label"):
+                short_label += f"\n{d['label'][:10]}"
+            ax.text(
+                d["x"], d["y"], short_label,
+                ha="center", va="center", fontsize=6.5,
+                color="#ffffff", fontweight="bold", zorder=3,
+            )
+
+        canvas = FigureCanvasQTAgg(fig)
+        canvas.setObjectName("topics-map-canvas")
+        self._map_fig = fig
+        self._map_ax = ax
+        self._map_canvas = canvas
+        canvas.mpl_connect("button_press_event", self._on_map_click)
+        self._map_frame_lay.addWidget(canvas, 1)
+        canvas.draw()
+
+    def _draw_fallback_map(self, summary: list[dict]) -> None:
+        if self._map_frame_lay is None:
+            return
+        while self._map_frame_lay.count() > 0:
+            item = self._map_frame_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        fb_scroll = QScrollArea()
+        fb_scroll.setWidgetResizable(True)
+        fb_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        fb_inner = QWidget()
+        fb_lay = QVBoxLayout(fb_inner)
+        fb_lay.setContentsMargins(12, 12, 12, 12)
+        fb_lay.setSpacing(6)
+
+        note = QLabel("Topic overview (distance map unavailable — see stderr for details)")
+        note.setObjectName("settings-hint")
+        note.setWordWrap(True)
+        fb_lay.addWidget(note)
+
+        for i, entry in enumerate(summary):
+            tid = entry.get("topic_id", "?")
+            label = entry.get("generated_label") or ""
+            count = entry.get("segment_count", 0)
+            txt = f"Topic {tid}"
+            if label:
+                txt += f"  —  {label}"
+            txt += f"   ({count} seg{'s' if count != 1 else ''})"
+            btn = QPushButton(txt)
+            btn.setObjectName("add-btn")
+            btn.clicked.connect(lambda _, idx=i: self._on_topic_selected(idx))
+            fb_lay.addWidget(btn)
+
+        fb_lay.addStretch(1)
+        fb_scroll.setWidget(fb_inner)
+        self._map_frame_lay.addWidget(fb_scroll, 1)
+
+    def _on_map_click(self, event) -> None:
+        if event.inaxes != self._map_ax or not self._map_topic_data:
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+        best_idx = 0
+        best_d = float("inf")
+        for i, d in enumerate(self._map_topic_data):
+            dist = (d["x"] - event.xdata) ** 2 + (d["y"] - event.ydata) ** 2
+            if dist < best_d:
+                best_d = dist
+                best_idx = i
+        self._on_topic_selected(best_idx)
+
+    def _on_topic_selected(self, idx: int) -> None:
+        self._selected_topic_idx = idx
+        if self._detail_inner_lay is None:
+            return
+
+        # Resolve the topic entry (prefer worker data which has keyword_weights)
+        if self._map_topic_data and idx < len(self._map_topic_data):
+            data = dict(self._map_topic_data[idx])
+            # Merge full JSON entry fields (examples, source_files, etc.)
+            tid = data.get("topic_id")
+            for entry in self._current_summary:
+                if entry.get("topic_id") == tid:
+                    for k, v in entry.items():
+                        data.setdefault(k, v)
+                    break
+        elif idx < len(self._current_summary):
+            data = self._current_summary[idx]
+        else:
+            return
+
+        # Clear detail pane
+        while self._detail_inner_lay.count() > 0:
+            item = self._detail_inner_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        self._build_detail_content(data)
+
+        # Redraw map with new selection (scatter map only)
+        if self._map_topic_data and self._map_canvas:
+            self._draw_scatter_map(self._map_topic_data, selected_idx=idx)
+
+    def _build_detail_content(self, data: dict) -> None:
+        if self._detail_inner_lay is None:
+            return
+        lay = self._detail_inner_lay
+        tid = data.get("topic_id", "?")
+        label = data.get("generated_label") or data.get("label") or ""
+        count = data.get("segment_count") or data.get("count") or 0
+        keywords = data.get("keywords", [])
+        kw_weights = data.get("keyword_weights", [])
+        examples = data.get("examples", [])
+        source_files = data.get("source_files", [])
+
+        # Header
+        hdr = QHBoxLayout()
+        id_lbl = QLabel(f"Topic {tid}")
+        id_lbl.setObjectName("section-title")
+        hdr.addWidget(id_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        if label:
+            badge = QLabel(label)
+            badge.setStyleSheet(
+                "background-color: #2563eb; color: #fff; border-radius: 10px;"
+                " padding: 2px 10px; font-size: 11px; font-weight: 600;"
+            )
+            hdr.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        hdr.addStretch(1)
+        cnt_lbl = QLabel(f"{count} seg{'s' if count != 1 else ''}")
+        cnt_lbl.setObjectName("settings-hint")
+        hdr.addWidget(cnt_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # Ask AI button
+        ask_btn = QPushButton("Ask AI")
+        ask_btn.setObjectName("topics-ask-ai-btn")
+        ask_btn.setFixedHeight(26)
+        ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        ask_btn.clicked.connect(lambda: self._ask_ai_about_topic(data))
+        hdr.addWidget(ask_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        lay.addLayout(hdr)
+
+        # Keyword bar chart (matplotlib) when weights available, else chips
+        if kw_weights:
+            self._add_keyword_barchart(lay, kw_weights[:8])
+        elif keywords:
+            kw_lbl = QLabel("  ·  ".join(keywords))
+            kw_lbl.setObjectName("settings-label")
+            kw_lbl.setWordWrap(True)
+            lay.addWidget(kw_lbl)
+
+        # Excerpts (clickable)
+        if examples:
+            exc_lbl = QLabel("Representative excerpts")
+            exc_lbl.setObjectName("settings-hint")
+            lay.addWidget(exc_lbl)
+            for i, ex in enumerate(examples[:5]):
+                ex_text = f'"{ex[:240]}{"…" if len(ex) > 240 else ""}"'
+                ex_lbl = QLabel(ex_text)
+                ex_lbl.setObjectName("settings-hint")
+                ex_lbl.setWordWrap(True)
+                ex_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+                src = source_files[i] if i < len(source_files) else None
+
+                def open_exc(event, excerpt=ex, s=src):
+                    self._open_excerpt_in_transcript(excerpt, s)
+
+                ex_lbl.mousePressEvent = open_exc
+                lay.addWidget(ex_lbl)
+
+        lay.addStretch(1)
+
+    def _add_keyword_barchart(self, parent_lay: QVBoxLayout, kw_weights: list) -> None:
+        try:
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+            from matplotlib.figure import Figure
+        except ImportError:
+            words = [w for w, _ in kw_weights]
+            parent_lay.addWidget(QLabel("  ·  ".join(words)))
+            return
+
+        theme = self._theme_getter() if self._theme_getter else "light"
+        dark = theme == "dark"
+        bg = "#141720" if dark else "#f8fafc"
+        bar_col = "#4c78a8"
+        fg = "#94a3b8" if dark else "#475569"
+
+        words = [w for w, _ in kw_weights]
+        vals = [max(0.0, float(v)) for _, v in kw_weights]
+        if not vals or max(vals) == 0:
+            parent_lay.addWidget(QLabel("  ·  ".join(words)))
+            return
+
+        fig = Figure(figsize=(3, len(words) * 0.28 + 0.3), facecolor=bg)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+        bars = ax.barh(range(len(words)), vals, color=bar_col, height=0.6)
+        ax.set_yticks(range(len(words)))
+        ax.set_yticklabels(words, color=fg, fontsize=8)
+        ax.tick_params(axis="x", colors=fg, labelsize=7)
+        ax.invert_yaxis()
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.xaxis.set_visible(False)
+        fig.subplots_adjust(left=0.45, right=0.98, top=0.98, bottom=0.05)
+
+        canvas = FigureCanvasQTAgg(fig)
+        max_h = min(220, len(words) * 26 + 20)
+        canvas.setMaximumHeight(max_h)
+        parent_lay.addWidget(canvas)
+        canvas.draw()
+
+    def _ask_ai_about_topic(self, data: dict) -> None:
+        tid = data.get("topic_id", "?")
+        keywords = data.get("keywords", [])
+        examples = data.get("examples", [])
+        kw_str = ", ".join(keywords[:6]) if keywords else "(none)"
+        ex_lines = "\n".join(
+            f"- {ex[:200]}" for ex in examples[:2] if ex
+        )
+        prompt = (
+            f"Tell me about Topic {tid}.\n\n"
+            f"Keywords: {kw_str}\n\n"
+            f"Representative excerpts:\n{ex_lines}"
+        )
+        self._ai_panel.prefill_input(prompt)
+
+    def _redraw_map_for_filter(self, filtered_summary: list[dict]) -> None:
+        """Narrow the map to filtered topic IDs; keep detail for currently selected if visible."""
+        if not self._map_topic_data:
+            self._draw_fallback_map(filtered_summary)
+            return
+        filtered_ids = {e.get("topic_id") for e in filtered_summary}
+        filtered_data = [d for d in self._map_topic_data if d.get("topic_id") in filtered_ids]
+        if not filtered_data:
+            self._draw_fallback_map(filtered_summary)
+            return
+        # Keep selected idx valid
+        sel_tid = (
+            self._map_topic_data[self._selected_topic_idx].get("topic_id")
+            if self._map_topic_data and self._selected_topic_idx < len(self._map_topic_data)
+            else None
+        )
+        new_sel = 0
+        for i, d in enumerate(filtered_data):
+            if d.get("topic_id") == sel_tid:
+                new_sel = i
+                break
+        self._draw_scatter_map(filtered_data, selected_idx=new_sel)
+        self._on_topic_selected_by_entry(new_sel, filtered_data)
+
+    def _on_topic_selected_by_entry(self, idx: int, topic_data: list[dict]) -> None:
+        """Select topic from an arbitrary topic_data list (used after filter)."""
+        if not topic_data or idx >= len(topic_data):
+            return
+        self._selected_topic_idx = idx
+        if self._detail_inner_lay is None:
+            return
+        data = dict(topic_data[idx])
+        tid = data.get("topic_id")
+        for entry in self._current_summary:
+            if entry.get("topic_id") == tid:
+                for k, v in entry.items():
+                    data.setdefault(k, v)
+                break
+        while self._detail_inner_lay.count() > 0:
+            item = self._detail_inner_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+        self._build_detail_content(data)
+
     def refresh_action_icons(self) -> None:
         theme = self._theme_getter() if self._theme_getter else "light"
         col = "#94a3b8" if theme == "dark" else "#475569"
@@ -655,6 +1155,8 @@ class TopicModelingPage(QFrame):
         self.refresh_action_icons()
         theme = self._theme_getter() if self._theme_getter else "light"
         self._ai_panel.update_theme(theme)
+        if self._map_topic_data:
+            self._draw_scatter_map(self._map_topic_data, selected_idx=self._selected_topic_idx)
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
@@ -1012,7 +1514,22 @@ class TopicModelingPage(QFrame):
     # ── Results loading ───────────────────────────────────────────────────
 
     def _clear_results(self) -> None:
-        """Remove all dynamically added topic cards and hide quality/filter."""
+        """Reset the results area to idle state."""
+        if self._map_worker and self._map_worker.isRunning():
+            self._map_worker.map_ready.disconnect()
+            self._map_worker.map_failed.disconnect()
+            self._map_worker.quit()
+            self._map_worker = None
+        self._map_topic_data = []
+        self._map_fig = None
+        self._map_ax = None
+        self._map_canvas = None
+        self._detail_splitter_set = False
+
+        if self._inner_splitter:
+            self._inner_splitter.setVisible(False)
+        self._results_scroll.setVisible(True)
+
         while self._results_inner_lay.count() > 0:
             item = self._results_inner_lay.takeAt(0)
             if item and item.widget():
@@ -1181,7 +1698,7 @@ class TopicModelingPage(QFrame):
             self._results_inner_lay.addWidget(lbl)
             self._results_inner_lay.addStretch(1)
             return
-        self._render_topic_cards(summary, source_path)
+        self._launch_results_view(summary)
 
     # ── Transcript click-through helpers ──────────────────────────────────
 
