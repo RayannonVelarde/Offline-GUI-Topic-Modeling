@@ -16,6 +16,7 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     if interviewer_speaker:
         preprocess_cmd.append(interviewer_speaker)
 
+    print("[STAGE] preprocessing")
     print("=== Running preprocessing ===")
     subprocess.run(preprocess_cmd, check=True, cwd=SRC_DIR)
 
@@ -38,9 +39,11 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     if use_labeling:
         topic_cmd.extend(["--label", ollama_model])
 
+    print("[STAGE] bertopic")
     print("\n=== Running topic modeling ===")
     subprocess.run(topic_cmd, check=True, cwd=SRC_DIR)
 
+    print("[STAGE] done")
     print("\n=== Pipeline complete ===")
     print(f"Input transcript: {input_path}")
     print(f"Cleaned transcript: {preprocessed_csv}")

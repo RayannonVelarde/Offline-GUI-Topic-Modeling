@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 
 from PySide6.QtCore import Qt, QProcess, QTimer, QSize
 from PySide6.QtGui import QShowEvent, QTextCursor
@@ -60,6 +61,13 @@ _TOPICS_LABEL_W = 236
 _AI_CONTEXT_PER_FILE_CHARS = 8000
 _AI_CONTEXT_TOTAL_CHARS = 24000
 
+_SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _fmt_elapsed(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 60}:{s % 60:02d}"
+
 
 def _resolve_python() -> str:
     bin_name = "Scripts\\python.exe" if os.name == "nt" else "bin/python"
@@ -86,6 +94,15 @@ class TopicModelingPage(QFrame):
         self._transcript_context: str = ""
         self._topics_context: str = ""
         self._last_transcript_path: str = ""
+
+        # ── Stage-progress state ──────────────────────────────────────────
+        self._stage_rows: list[tuple[str, QLabel, QLabel]] = []  # (key, icon, time)
+        self._stage_active_key: str | None = None
+        self._stage_start_times: dict[str, float] = {}
+        self._show_labeling_stage: bool = False
+        self._spinner_frame: int = 0
+        self._spinner_timer: QTimer | None = None
+        self._elapsed_timer: QTimer | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -307,6 +324,147 @@ class TopicModelingPage(QFrame):
         self._results_inner_lay.addStretch(1)
         self._results_inner_lay.addWidget(self._no_results_lbl)
         self._results_inner_lay.addStretch(1)
+
+    # ── Live progress feed ────────────────────────────────────────────────
+
+    def _show_progress_in_results(self, show_labeling: bool) -> None:
+        """Replace the results area content with the stage-checklist widget."""
+        while self._results_inner_lay.count() > 0:
+            item = self._results_inner_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        self._show_labeling_stage = show_labeling
+        self._stage_rows = []
+        self._stage_active_key = None
+        self._stage_start_times = {}
+        self._spinner_frame = 0
+
+        prog = QFrame()
+        prog.setObjectName("topics-progress-widget")
+        prog_lay = QVBoxLayout(prog)
+        prog_lay.setContentsMargins(20, 20, 20, 20)
+        prog_lay.setSpacing(12)
+
+        header_lbl = QLabel("Pipeline running…")
+        header_lbl.setObjectName("section-title")
+        prog_lay.addWidget(header_lbl)
+
+        stages = [
+            ("loading", "Loading transcripts"),
+            ("preprocessing", "Preprocessing"),
+            ("bertopic", "BERTopic" + (" + LLM labeling" if show_labeling else "")),
+            ("done", "Done"),
+        ]
+
+        for key, label in stages:
+            row_w = QWidget()
+            row_lay = QHBoxLayout(row_w)
+            row_lay.setContentsMargins(0, 2, 0, 2)
+            row_lay.setSpacing(10)
+
+            icon_lbl = QLabel("◦")
+            icon_lbl.setFixedWidth(16)
+            icon_lbl.setStyleSheet("color: #94a3b8; font-size: 13px; background: transparent;")
+
+            name_lbl = QLabel(label)
+            name_lbl.setObjectName("settings-label")
+
+            time_lbl = QLabel("—")
+            time_lbl.setObjectName("settings-hint")
+            time_lbl.setFixedWidth(44)
+            time_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+            row_lay.addWidget(icon_lbl)
+            row_lay.addWidget(name_lbl, 1)
+            row_lay.addWidget(time_lbl)
+            prog_lay.addWidget(row_w)
+            self._stage_rows.append((key, icon_lbl, time_lbl))
+
+        prog_lay.addStretch(1)
+        self._results_inner_lay.addWidget(prog)
+        self._results_inner_lay.addStretch(1)
+
+        if self._spinner_timer:
+            self._spinner_timer.stop()
+        self._spinner_timer = QTimer(self)
+        self._spinner_timer.timeout.connect(self._tick_spinner)
+        self._spinner_timer.start(100)
+
+        if self._elapsed_timer:
+            self._elapsed_timer.stop()
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.timeout.connect(self._tick_elapsed)
+        self._elapsed_timer.start(1000)
+
+        self._advance_stage("loading")
+
+    def _advance_stage(self, key: str) -> None:
+        """Mark the current active stage done and activate `key`."""
+        now = time.time()
+        if self._stage_active_key is not None:
+            elapsed = now - self._stage_start_times.get(self._stage_active_key, now)
+            for skey, icon_lbl, time_lbl in self._stage_rows:
+                if skey == self._stage_active_key:
+                    icon_lbl.setText("✓")
+                    icon_lbl.setStyleSheet("color: #22c55e; font-size: 13px; background: transparent;")
+                    time_lbl.setText(_fmt_elapsed(elapsed))
+                    break
+
+        self._stage_active_key = key
+        self._stage_start_times[key] = now
+        for skey, icon_lbl, time_lbl in self._stage_rows:
+            if skey == key:
+                icon_lbl.setText(_SPINNER_CHARS[0])
+                icon_lbl.setStyleSheet("color: #2563eb; font-size: 13px; background: transparent;")
+                time_lbl.setText("0:00")
+                break
+
+    def _tick_spinner(self) -> None:
+        if not self._stage_active_key:
+            return
+        self._spinner_frame = (self._spinner_frame + 1) % len(_SPINNER_CHARS)
+        ch = _SPINNER_CHARS[self._spinner_frame]
+        for skey, icon_lbl, _ in self._stage_rows:
+            if skey == self._stage_active_key:
+                icon_lbl.setText(ch)
+                break
+
+    def _tick_elapsed(self) -> None:
+        if not self._stage_active_key:
+            return
+        start = self._stage_start_times.get(self._stage_active_key)
+        if start is None:
+            return
+        for skey, _, time_lbl in self._stage_rows:
+            if skey == self._stage_active_key:
+                time_lbl.setText(_fmt_elapsed(time.time() - start))
+                break
+
+    def _finalize_stages(self, success: bool) -> None:
+        """Stop timers and mark the active stage done (✓) or failed (✗)."""
+        if self._spinner_timer:
+            self._spinner_timer.stop()
+            self._spinner_timer = None
+        if self._elapsed_timer:
+            self._elapsed_timer.stop()
+            self._elapsed_timer = None
+
+        if not self._stage_active_key:
+            return
+        now = time.time()
+        elapsed = now - self._stage_start_times.get(self._stage_active_key, now)
+        for skey, icon_lbl, time_lbl in self._stage_rows:
+            if skey == self._stage_active_key:
+                if success:
+                    icon_lbl.setText("✓")
+                    icon_lbl.setStyleSheet("color: #22c55e; font-size: 13px; background: transparent;")
+                else:
+                    icon_lbl.setText("✗")
+                    icon_lbl.setStyleSheet("color: #ef4444; font-size: 13px; background: transparent;")
+                time_lbl.setText(_fmt_elapsed(elapsed))
+                break
+        self._stage_active_key = None
 
     def refresh_action_icons(self) -> None:
         theme = self._theme_getter() if self._theme_getter else "light"
@@ -643,6 +801,7 @@ class TopicModelingPage(QFrame):
         else:
             self._run_btn.setEnabled(False)
             self._run_btn.setText("Running…")
+            self._show_progress_in_results(show_labeling=self._gpt4all_checkbox.isChecked())
 
     def _on_stdout(self) -> None:
         if not self._process:
@@ -652,6 +811,13 @@ class TopicModelingPage(QFrame):
             for ln in data.data().decode("utf-8", errors="replace").splitlines():
                 if ln.strip():
                     self._append_log(ln)
+                    stripped = ln.strip()
+                    if stripped == "[STAGE] preprocessing":
+                        self._advance_stage("preprocessing")
+                    elif stripped == "[STAGE] bertopic":
+                        self._advance_stage("bertopic")
+                    elif stripped == "[STAGE] done":
+                        self._advance_stage("done")
 
     def _on_stderr(self) -> None:
         if not self._process:
@@ -665,7 +831,9 @@ class TopicModelingPage(QFrame):
     def _on_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
         self._run_btn.setEnabled(True)
         self._run_btn.setText("▶  Run Pipeline")
-        if exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit:
+        success = exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit
+        self._finalize_stages(success)
+        if success:
             self._append_log("[pipeline] Pipeline completed successfully.", "#22c55e")
             QTimer.singleShot(500, self._load_latest_results)
         else:
