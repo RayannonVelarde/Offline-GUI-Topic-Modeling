@@ -1,4 +1,48 @@
-# speech-to-text-AI
-This repository provides a complete solution for transcribing, translating, and diarizing audio interview files locally using WhisperX Modal, configured to run entirely on your system. It is designed with privacy in mind, ensuring that all processing happens offline—no data is sent to any external server or cloud service. This makes it ideal for handling sensitive or confidential audio recordings, such as research interviews, internal company meetings, or private conversations.
+# Speech to Text Studio
 
-The workflow begins by accepting an audio file (or batch of files) in either English or Spanish. The system first performs speaker diarization, automatically detecting and labeling the different speakers in the conversation as Speaker 1, Speaker 2, and so on. This is followed by the transcription phase, where the spoken content is converted into readable text. If the audio is in Spanish, it is translated into English, making it easier to work with bilingual data. All transcriptions are properly punctuated, resulting in clean, easy-to-read output. To support performance evaluation and benchmarking, the code also logs how much time it takes to process each audio file.
+## Overview
+
+A local, offline desktop application for transcribing, translating, and diarizing audio interview files. The backend (`studio_engine.py`) runs WhisperX and pyannote-audio entirely on your machine — no data leaves your device. The GUI connects to the engine as a subprocess.
+
+## Structure
+
+```
+studio/
+├── studio_engine.py   # Backend — called as a subprocess by the GUI
+└── gui/               # Desktop GUI (PySide6)
+    ├── main.py        # Entry point
+    ├── main_window.py # Main window and job logic
+    ├── widgets.py     # Custom UI components
+    ├── stylesheet.py  # App-wide styles
+    └── nav_icons.py   # Navigation icons
+```
+
+## Requirements
+
+- Python 3.10
+- ffmpeg installed and on your PATH
+- A Hugging Face token with access to pyannote speaker diarization models
+
+## Setup
+
+```bash
+python3.10 -m venv .venv
+source .venv/bin/activate        # macOS / Linux
+# .\.venv\Scripts\activate       # Windows
+
+python -m pip install --upgrade pip setuptools wheel
+
+pip install torch==2.8.0 torchaudio==2.8.0
+pip install whisperx==3.7.6 pyannote-audio==3.4.0
+pip install python-dotenv PySide6 mutagen keyring
+```
+
+## Usage
+
+Run the GUI from the `studio/` directory:
+
+```bash
+python gui/main.py
+```
+
+The engine (`studio_engine.py`) is launched automatically by the GUI — you don't need to run it directly.
