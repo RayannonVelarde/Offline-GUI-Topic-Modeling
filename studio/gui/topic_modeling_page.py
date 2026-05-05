@@ -35,7 +35,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QSplitter,
     QTextEdit,
     QToolButton,
@@ -43,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from nav_icons import make_folder_open_icon
+from nav_icons import make_disclosure_chevron_icon, make_folder_open_icon
 from llm_assistant import LLMAssistantPanel, TOPIC_QUICK_ACTIONS, _TOPIC_SYSTEM
 
 # Path resolution: topic_modeling/src lives two levels above this file
@@ -220,9 +219,12 @@ class TopicModelingPage(QFrame):
         opts_hdr.addWidget(section_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
         self._options_chevron = QToolButton()
         self._options_chevron.setObjectName("settings-chevron-btn")
-        self._options_chevron.setText("▾")
         self._options_chevron.setAutoRaise(True)
         self._options_chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._options_chevron.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._options_chevron.setFixedSize(28, 28)
+        self._options_chevron.setIconSize(QSize(22, 22))
+        self._refresh_options_chevron_icon(expanded=True)
         self._options_chevron.clicked.connect(self._toggle_options_panel)
         opts_hdr.addWidget(self._options_chevron, 0, Qt.AlignmentFlag.AlignVCenter)
         options_lay.addLayout(opts_hdr)
@@ -378,16 +380,23 @@ class TopicModelingPage(QFrame):
         self._filter_source_combo.setMinimumWidth(180)
         self._filter_source_combo.currentIndexChanged.connect(self._apply_filters)
         fb_lay.addWidget(self._filter_source_combo)
-        fb_min_lbl = QLabel("Min size:")
-        fb_min_lbl.setObjectName("settings-label")
-        fb_lay.addWidget(fb_min_lbl)
-        self._filter_minsize_spin = QSpinBox()
-        self._filter_minsize_spin.setObjectName("settings-input")
-        self._filter_minsize_spin.setMinimum(1)
-        self._filter_minsize_spin.setValue(1)
-        self._filter_minsize_spin.setFixedWidth(60)
-        self._filter_minsize_spin.valueChanged.connect(self._apply_filters)
-        fb_lay.addWidget(self._filter_minsize_spin)
+        # Visible chevron next to the source combo so users see it's a dropdown.
+        self._filter_source_chevron = QToolButton()
+        self._filter_source_chevron.setObjectName("settings-chevron-btn")
+        self._filter_source_chevron.setAutoRaise(True)
+        self._filter_source_chevron.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._filter_source_chevron.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._filter_source_chevron.setFixedSize(22, 22)
+        self._filter_source_chevron.setIconSize(QSize(16, 16))
+        self._filter_source_chevron.setToolTip("Choose source")
+        self._filter_source_chevron.clicked.connect(
+            lambda: self._filter_source_combo.showPopup()
+        )
+        self._refresh_source_chevron_icon()
+        fb_lay.addWidget(self._filter_source_chevron)
+        # Min size spinbox removed — the additional knob looked cluttered and
+        # users rarely changed it; cards always show every topic now.
+        self._filter_minsize_spin = None
         fb_lay.addStretch(1)
         self._filter_bar.setVisible(False)
         results_vlay.addWidget(self._filter_bar)
@@ -419,40 +428,13 @@ class TopicModelingPage(QFrame):
         self._results_scroll.setWidget(self._results_inner)
         results_body_lay.addWidget(self._results_scroll, 1)
 
-        # ── Inner splitter: map (left) | detail (right) — shown when results load ──
-        self._inner_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._inner_splitter.setChildrenCollapsible(False)
-        self._inner_splitter.setHandleWidth(6)
-        self._inner_splitter.setVisible(False)
-
-        map_frame = QFrame()
-        map_frame.setObjectName("topics-map-frame")
-        self._map_frame_lay = QVBoxLayout(map_frame)
-        self._map_frame_lay.setContentsMargins(0, 0, 0, 0)
-        self._map_frame_lay.setSpacing(0)
-
-        detail_frame = QFrame()
-        detail_frame.setObjectName("topics-detail-pane")
-        detail_frame_lay = QVBoxLayout(detail_frame)
-        detail_frame_lay.setContentsMargins(0, 0, 0, 0)
-        detail_frame_lay.setSpacing(0)
-        detail_scroll = QScrollArea()
-        detail_scroll.setWidgetResizable(True)
-        detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        detail_inner = QWidget()
-        self._detail_inner_lay = QVBoxLayout(detail_inner)
-        self._detail_inner_lay.setContentsMargins(12, 8, 12, 12)
-        self._detail_inner_lay.setSpacing(10)
-        self._detail_inner_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
-        detail_scroll.setWidget(detail_inner)
-        detail_frame_lay.addWidget(detail_scroll, 1)
-
-        self._inner_splitter.addWidget(map_frame)
-        self._inner_splitter.addWidget(detail_frame)
-        self._inner_splitter.setStretchFactor(0, 1)
-        self._inner_splitter.setStretchFactor(1, 1)
-
-        results_body_lay.addWidget(self._inner_splitter, 1)
+        # Dual-pane scatter map + detail view was removed — the empty plot felt
+        # cluttered and not very informative. The scrollable cards view above
+        # is now the sole results layout. Map/detail layout handles are kept as
+        # `None` so existing helper methods stay safe no-ops.
+        self._inner_splitter = None
+        self._map_frame_lay = None
+        self._detail_inner_lay = None
         results_vlay.addWidget(results_body, 1)
 
         # AI Assistant panel (third pane)
@@ -657,13 +639,30 @@ class TopicModelingPage(QFrame):
             return
         visible = self._options_body.isVisible()
         self._options_body.setVisible(not visible)
-        self._options_chevron.setText("▾" if not visible else "▸")
+        self._refresh_options_chevron_icon(expanded=not visible)
 
     def _collapse_options_panel(self) -> None:
         if self._options_body and self._options_body.isVisible():
             self._options_body.setVisible(False)
             if self._options_chevron:
-                self._options_chevron.setText("▸")
+                self._refresh_options_chevron_icon(expanded=False)
+
+    def _refresh_options_chevron_icon(self, *, expanded: bool) -> None:
+        if self._options_chevron is None:
+            return
+        theme = self._theme_getter() if self._theme_getter else "light"
+        col = "#94a3b8" if theme == "dark" else "#475569"
+        self._options_chevron.setIcon(
+            make_disclosure_chevron_icon(expanded=expanded, size=22, color_hex=col)
+        )
+
+    def _refresh_source_chevron_icon(self) -> None:
+        chev = getattr(self, "_filter_source_chevron", None)
+        if chev is None:
+            return
+        theme = self._theme_getter() if self._theme_getter else "light"
+        col = "#94a3b8" if theme == "dark" else "#475569"
+        chev.setIcon(make_disclosure_chevron_icon(expanded=True, size=16, color_hex=col))
 
     # ── Quality strip helpers ─────────────────────────────────────────────
 
@@ -754,16 +753,11 @@ class TopicModelingPage(QFrame):
     # ── Dual-pane map view ────────────────────────────────────────────────
 
     def _launch_results_view(self, summary: list[dict]) -> None:
-        """Switch the results area from scroll/card view to the map + detail split."""
-        if not summary or self._inner_splitter is None:
+        """Render the topics summary as a scrollable list of cards."""
+        if not summary:
             return
-        self._results_scroll.setVisible(False)
-        self._inner_splitter.setVisible(True)
-        if not self._detail_splitter_set:
-            QTimer.singleShot(0, self._set_inner_split)
-        self._show_map_loading()
-        self._on_topic_selected(0)
-        self._launch_map_worker(summary)
+        self._results_scroll.setVisible(True)
+        self._render_topic_cards(summary, self._current_source_path)
 
     def _set_inner_split(self) -> None:
         sp = self._inner_splitter
@@ -1140,6 +1134,11 @@ class TopicModelingPage(QFrame):
         col = "#94a3b8" if theme == "dark" else "#475569"
         self._open_output_btn.setIcon(make_folder_open_icon(size=18, color_hex=col))
         self._open_output_btn.setIconSize(QSize(18, 18))
+        if self._options_chevron is not None and self._options_body is not None:
+            self._refresh_options_chevron_icon(
+                expanded=self._options_body.isVisible()
+            )
+        self._refresh_source_chevron_icon()
 
     def set_input_path(self, path: str) -> None:
         """Load a transcript path from another GUI page."""
