@@ -3,6 +3,9 @@
 .env.local
 speech_to_text_AI
 
+# Virtual environments
+.venv/
+venv/
 
 # Data
 data/
@@ -14,9 +17,16 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-#output
+# Outputs
+outputs/
+output/
+topic_modeling/output/
+topic_modeling/models/
 transcription_english.txt
 transcription_spanish.txt
 
-# info
+# Info
 info.txt
+
+# macOS
+.DS_Store

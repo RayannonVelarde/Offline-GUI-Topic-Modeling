@@ -13,7 +13,7 @@ LIGHT_STYLESHEET = """
 QMainWindow, QWidget {
     background-color: #f3f4f6; /* soft off-white */
     color: #1f2937;            /* dark gray (not pure black) */
-    font-family: 'Helvetica Neue', 'Segoe UI', sans-serif;
+    font-family: 'SF Pro Display', 'Segoe UI', sans-serif;
     font-size: 13px;
 }
 
@@ -209,6 +209,79 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 
 #settings-page #settings-card #section-title {
     padding-bottom: 0px;
+}
+
+/* Topic modeling page: mirror Settings (transparent host + card section titles) */
+#topics-page QWidget {
+    background-color: transparent;
+}
+#topics-page #settings-card #section-title {
+    padding-bottom: 0px;
+}
+
+#topics-page QFrame#topics-results-body {
+    background-color: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+}
+#topics-page QFrame#topics-results-body QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+#topics-page QLabel#topics-results-empty {
+    font-size: 13px;
+    color: #64748b;
+    padding: 8px 16px;
+    background: transparent;
+}
+
+#topics-page QToolButton#review-open-folder-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#topics-page QToolButton#review-open-folder-btn:hover {
+    background-color: rgba(15, 23, 42, 0.06);
+    border-radius: 4px;
+}
+
+/* Topic page — quality strip + filter bar */
+#topics-quality-strip {
+    background: transparent;
+    border-bottom: 1px solid #e2e8f0;
+    padding: 4px 0px;
+}
+#topics-filter-bar {
+    background: transparent;
+    padding: 4px 0px;
+}
+
+/* Topic page — map / detail panes */
+#topics-map-frame {
+    background: transparent;
+}
+#topics-detail-pane {
+    background: transparent;
+    border-left: 1px solid #e2e8f0;
+}
+#topics-map-canvas {
+    background: transparent;
+}
+
+/* Ask AI button (smaller than add-btn) */
+QPushButton#topics-ask-ai-btn {
+    background-color: transparent;
+    border: 1.5px solid #2563eb;
+    border-radius: 6px;
+    color: #2563eb;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#topics-ask-ai-btn:hover {
+    background-color: #eff6ff;
+    color: #1d4ed8;
 }
 
 /* ── Review ── */
@@ -525,7 +598,7 @@ QProgressBar {
     background-color: #e2e8f0;
     border-radius: 3px;
     height: 4px;
-    color: transparent;
+    text-visible: false;
     border: none;
 }
 QProgressBar::chunk {
@@ -571,6 +644,18 @@ QScrollBar::handle:vertical {
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
+
+/* ── AI Assistant panel (light) ── */
+#ai-assistant-panel {
+    background-color: #ffffff;
+    border: none;
+    border-radius: 0px;
+}
+#ai-header {
+    background-color: #f8fafc;
+    border-bottom: 1px solid #e2e8f0;
+    border-radius: 0px;
+}
 """
 
 
@@ -578,7 +663,7 @@ DARK_STYLESHEET = """
 QMainWindow, QWidget {
     background-color: #0f1117;
     color: #e2e8f0;
-    font-family: 'Helvetica Neue', 'Segoe UI', sans-serif;
+    font-family: 'SF Pro Display', 'Segoe UI', sans-serif;
     font-size: 13px;
 }
 
@@ -763,6 +848,79 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 
 #settings-page #settings-card #section-title {
     padding-bottom: 0px;
+}
+
+/* Topic modeling page: mirror Settings (transparent host + card section titles) */
+#topics-page QWidget {
+    background-color: transparent;
+}
+#topics-page #settings-card #section-title {
+    padding-bottom: 0px;
+}
+
+#topics-page QFrame#topics-results-body {
+    background-color: #0f1117;
+    border: 1px solid #1e2433;
+    border-radius: 10px;
+}
+#topics-page QFrame#topics-results-body QScrollArea {
+    background: transparent;
+    border: none;
+}
+
+#topics-page QLabel#topics-results-empty {
+    font-size: 13px;
+    color: #64748b;
+    padding: 8px 16px;
+    background: transparent;
+}
+
+#topics-page QToolButton#review-open-folder-btn {
+    background: transparent;
+    border: none;
+    padding: 0px;
+}
+#topics-page QToolButton#review-open-folder-btn:hover {
+    background-color: rgba(255, 255, 255, 0.07);
+    border-radius: 4px;
+}
+
+/* Topic page — quality strip + filter bar (dark) */
+#topics-quality-strip {
+    background: transparent;
+    border-bottom: 1px solid #1e2433;
+    padding: 4px 0px;
+}
+#topics-filter-bar {
+    background: transparent;
+    padding: 4px 0px;
+}
+
+/* Topic page — map / detail panes (dark) */
+#topics-map-frame {
+    background: transparent;
+}
+#topics-detail-pane {
+    background: transparent;
+    border-left: 1px solid #1e2433;
+}
+#topics-map-canvas {
+    background: transparent;
+}
+
+/* Ask AI button (dark) */
+QPushButton#topics-ask-ai-btn {
+    background-color: transparent;
+    border: 1.5px solid #3b82f6;
+    border-radius: 6px;
+    color: #3b82f6;
+    padding: 3px 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+QPushButton#topics-ask-ai-btn:hover {
+    background-color: #1e2d4a;
+    color: #60a5fa;
 }
 
 /* ── Review ── */
@@ -1068,7 +1226,7 @@ QProgressBar {
     background-color: #1e2433;
     border-radius: 3px;
     height: 4px;
-    color: transparent;
+    text-visible: false;
     border: none;
 }
 QProgressBar::chunk {
@@ -1113,6 +1271,18 @@ QScrollBar::handle:vertical {
 }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
+}
+
+/* ── AI Assistant panel (dark) ── */
+#ai-assistant-panel {
+    background-color: #141720;
+    border: none;
+    border-radius: 0px;
+}
+#ai-header {
+    background-color: #0f1117;
+    border-bottom: 1px solid #1e2433;
+    border-radius: 0px;
 }
 """
 

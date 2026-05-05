@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 
 from widgets import DropZone
 from stylesheet import THEME_DARK, THEME_LIGHT, get_stylesheet
+from topic_modeling_page import TopicModelingPage
 from nav_icons import (
     make_disclosure_chevron_icon,
     make_folder_open_icon,
@@ -229,6 +230,7 @@ NAV_DEF: list[tuple[str, str]] = [
     ("home", "Home"),
     ("jobs", "Jobs"),
     ("review", "Review"),
+    ("topics", "Topic Modeling"),
     ("settings", "Settings"),
 ]
 
@@ -715,8 +717,7 @@ class MainWindow(QMainWindow):
         self._review_highlight_translation: bool = False
         self._review_highlight_enabled: bool = True
         self._review_transcript_path: str = ""
-        self._review_translation_path: str = ""
-        # When *_segments.json is missing, build equal-length slices after media duration is known.
+        self._review_translation_path: str = ""        # When *_segments.json is missing, build equal-length slices after media duration is known.
         self._review_fallback_tx_lines: int = 0
         # Output folders we have already attempted legacy-filename migration
         # on this session. Keyed by canonicalized absolute path.
@@ -821,6 +822,8 @@ class MainWindow(QMainWindow):
         self._refresh_home_folder_row_icons()
         self._refresh_jobs_folder_row_icons()
         self._refresh_review_page_action_icons()
+        if getattr(self, "_topics_page", None) is not None:
+            self._topics_page.refresh_theme()
         self._refresh_home_log_disclosure_icons()
         self._refresh_home_remove_row_icons()
         self._refresh_settings_disclosure_icons()
@@ -1003,7 +1006,7 @@ class MainWindow(QMainWindow):
         return sidebar
 
     def _on_nav_clicked(self, page_id: str):
-        if page_id in ("home", "jobs", "review", "settings"):
+        if page_id in ("home", "jobs", "review", "topics", "settings"):
             self._show_page(page_id)
 
     def _set_active_nav(self, page_id: str):
@@ -1018,7 +1021,7 @@ class MainWindow(QMainWindow):
         self._refresh_nav_icons()
 
     def _show_page(self, page: str):
-        page = page if page in ("home", "jobs", "review", "settings") else "home"
+        page = page if page in ("home", "jobs", "review", "topics", "settings") else "home"
         self._current_page = page
 
         if page == "settings":
@@ -1031,6 +1034,9 @@ class MainWindow(QMainWindow):
         elif page == "jobs":
             self._set_active_nav("jobs")
             self._pages.setCurrentWidget(self._jobs_page)
+        elif page == "topics":
+            self._set_active_nav("topics")
+            self._pages.setCurrentWidget(self._topics_page)
         else:
             self._set_active_nav("home")
             self._pages.setCurrentWidget(self._home_page)
@@ -1047,10 +1053,12 @@ class MainWindow(QMainWindow):
         self._home_page = self._build_home_page()
         self._jobs_page = self._build_jobs_page()
         self._review_page = self._build_review_page()
+        self._topics_page = TopicModelingPage(theme_getter=lambda: self._theme)
         self._settings_page = self._build_settings_page()
         self._pages.addWidget(self._home_page)
         self._pages.addWidget(self._jobs_page)
         self._pages.addWidget(self._review_page)
+        self._pages.addWidget(self._topics_page)
         self._pages.addWidget(self._settings_page)
         layout.addWidget(self._pages)
 
@@ -1211,6 +1219,13 @@ class MainWindow(QMainWindow):
         self.review_open_folder_btn.setAutoRaise(True)
         self.review_open_folder_btn.clicked.connect(self._open_review_folder)
         selector_row.addWidget(self.review_open_folder_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.review_analyze_topics_btn = QPushButton("Analyze with Topic Modeling")
+        self.review_analyze_topics_btn.setObjectName("add-btn")
+        self.review_analyze_topics_btn.setToolTip("Send this transcript to the Topic Modeling page")
+        self.review_analyze_topics_btn.clicked.connect(self._send_review_transcript_to_topics)
+        selector_row.addWidget(self.review_analyze_topics_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         info_layout.addLayout(selector_row)
 
         self.review_info_path = QLabel("")
@@ -3964,6 +3979,39 @@ class MainWindow(QMainWindow):
             self._sync_review_highlight_from_time_ms(int(self._review_player.position()))
         else:
             self._apply_review_segment_highlight(None)
+
+    def _send_review_transcript_to_topics(self) -> None:
+        """Send the currently selected Review transcript into the Topic Modeling page."""
+        it = self._selected_review_item()
+        if not it:
+            QMessageBox.information(
+                self,
+                "No transcript selected",
+                "Select a completed transcript in Review first.",
+            )
+            return
+
+        # If the transcript is currently being edited, toggle edit off so it saves first.
+        if hasattr(self, "review_edit_transcript_btn") and self.review_edit_transcript_btn.isChecked():
+            self.review_edit_transcript_btn.setChecked(False)
+
+        transcript_path = (
+            it.get("transcript_path")
+            or it.get("spanish_path")
+            or self._review_transcript_path
+            or ""
+        ).strip()
+
+        if not transcript_path or not os.path.isfile(transcript_path):
+            QMessageBox.warning(
+                self,
+                "Transcript not found",
+                "Could not find the selected transcript file for topic modeling.",
+            )
+            return
+
+        self._topics_page.set_input_path(transcript_path)
+        self._show_page("topics")
 
     def _open_review_folder(self):
         it = self._selected_review_item()
