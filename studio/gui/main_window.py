@@ -117,6 +117,15 @@ KEY_DEFAULT_MODEL = "jobs/default_model"
 KEY_DEFAULT_INITIAL_PROMPT = "jobs/default_initial_prompt"
 KEY_DEFAULT_PREPROCESS = "jobs/default_preprocess"
 KEY_DEFAULT_SPLIT_ON_SPEAKER = "jobs/default_split_on_speaker_change"
+# Persisted Recent jobs list. Keeps Complete + Error/Failed/Cancelled entries
+# across launches so users see history identical to the in-session state.
+KEY_JOBS_HISTORY = "jobs/history"
+JOBS_HISTORY_MAX = 50
+
+
+def _is_persistable_job_status(status: str) -> bool:
+    s = (status or "").strip().lower()
+    return bool(s) and s not in {"processing", "queued", "pending", "running"}
 
 ENGINE_TRANSCRIPT_PREFIX = "transcription_"
 ENGINE_TRANSLATION_PREFIX = "translation_"
@@ -129,6 +138,28 @@ TRANSCRIPTION_META_SUFFIX = "_job_meta.json"
 LEGACY_TRANSCRIPTION_META_SUFFIX = "_transcription_meta.json"
 # Sidecar from studio_engine (per audio stem): <stem>_segments.json
 REVIEW_SEGMENTS_SUFFIX = "_segments.json"
+# Hidden subdirectory inside the user's output folder where we tuck JSON
+# sidecars so the user-facing folder only shows transcript .txt files.
+META_SUBDIR = ".meta"
+
+
+def _resolve_sidecar(out_dir: str, filename: str) -> str:
+    """Return the existing sidecar path for ``filename``.
+
+    Prefers the new hidden ``.meta/`` subfolder, falls back to the legacy
+    flat layout (``<out_dir>/<filename>``) so old runs still load. Returns
+    the new ``.meta/`` path even if no file exists yet, so callers can use
+    it as a write target.
+    """
+    if not out_dir:
+        return ""
+    new_path = os.path.join(out_dir, META_SUBDIR, filename)
+    if os.path.isfile(new_path):
+        return new_path
+    legacy = os.path.join(out_dir, filename)
+    if os.path.isfile(legacy):
+        return legacy
+    return new_path
 # Cap Review transcript preview lines so QTextBlock index stays aligned with segment index.
 REVIEW_PREVIEW_MAX_LINES = 500
 
@@ -710,6 +741,7 @@ class MainWindow(QMainWindow):
         self._current_page = "home"
         self._theme = THEME_LIGHT
         self._jobs: list[dict] = []
+        self._jobs = self._load_jobs_history()
         self._review_items: list[dict] = []
         self._review_segments: list[dict] = []
         self._review_sync_line_count: int = 0
@@ -1036,6 +1068,7 @@ class MainWindow(QMainWindow):
             self._pages.setCurrentWidget(self._jobs_page)
         elif page == "topics":
             self._set_active_nav("topics")
+            self._refresh_review_items()
             self._pages.setCurrentWidget(self._topics_page)
         else:
             self._set_active_nav("home")
@@ -1100,6 +1133,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._home_warning)
 
         layout.addWidget(self._build_table())
+        self._restore_home_table_from_jobs()
 
         start_btn = QPushButton("▶  Start Job")
         self._home_start_btn = start_btn
@@ -1168,7 +1202,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(card)
         layout.addStretch()
-        self._sync_jobs_empty_state()
+        self._refresh_jobs_table()
         return page
 
     def _build_review_page(self) -> QFrame:
@@ -2261,6 +2295,39 @@ class MainWindow(QMainWindow):
             "Complete a job or choose an output folder in Settings.",
         )
 
+    def _open_review_for_path(self, path_key: str) -> None:
+        """Switch to the Review page and select the row matching ``path_key``.
+
+        ``path_key`` is the canonical audio path used by Home/Jobs rows; Review
+        items carry the same value under ``audio_path`` once the job completes.
+        Falls back to just opening the page if no matching item is found yet.
+        """
+        self._show_page("review")
+        if not hasattr(self, "review_selector") or not self._review_items:
+            return
+        target = (path_key or "").strip()
+        if not target:
+            return
+        try:
+            target_norm = os.path.normcase(os.path.abspath(target))
+        except Exception:
+            target_norm = target
+        target_base = os.path.basename(target)
+        match_idx = -1
+        for i, it in enumerate(self._review_items):
+            ap = (it.get("audio_path") or "").strip()
+            if not ap:
+                continue
+            try:
+                ap_norm = os.path.normcase(os.path.abspath(ap))
+            except Exception:
+                ap_norm = ap
+            if ap_norm == target_norm or os.path.basename(ap) == target_base:
+                match_idx = i
+                break
+        if match_idx >= 0 and match_idx < self.review_selector.count():
+            self.review_selector.setCurrentIndex(match_idx)
+
     def _remove_home_row_by_path_key(self, path_key: str) -> None:
         """Remove a single row from the Home queue. Does NOT touch the audio
         file on disk. Silently refuses if the row is the actively-running job,
@@ -2279,6 +2346,8 @@ class MainWindow(QMainWindow):
         if target_row < 0:
             return
 
+        resolved_path = self._path_for_row(target_row) or path_key
+
         if (
             self._job_process is not None
             and self._current_job_row is not None
@@ -2290,6 +2359,11 @@ class MainWindow(QMainWindow):
             return
 
         self.table.removeRow(target_row)
+        self._remove_existing_job_records_for_file(resolved_path)
+        if hasattr(self, "jobs_table"):
+            self._refresh_jobs_table()
+        if hasattr(self, "review_selector"):
+            self._refresh_review_items()
         if hasattr(self, "_home_start_btn"):
             self._home_start_btn.setEnabled(self.table.rowCount() > 0)
 
@@ -2422,7 +2496,7 @@ class MainWindow(QMainWindow):
         return w
 
     def _build_jobs_output_folder_cell(self, folder_display: str, path_key: str) -> QWidget:
-        """Output path + compact folder button on the right (same open logic as Home)."""
+        """Output path + compact folder/review buttons on the right."""
         w = QWidget()
         # Flat, transparent container so the table/card background remains the only fill.
         w.setAutoFillBackground(False)
@@ -2430,25 +2504,55 @@ class MainWindow(QMainWindow):
         w.setStyleSheet("background-color: transparent; border: none; border-radius: 0px;")
         lay = QHBoxLayout(w)
         lay.setContentsMargins(6, 4, 6, 4)
-        lay.setSpacing(8)
+        lay.setSpacing(6)
         path_lbl = QLabel((folder_display or "").strip() or "—")
         path_lbl.setWordWrap(False)
         path_lbl.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         path_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         path_lbl.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(path_lbl, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        _muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
+        pk = path_key.strip() if path_key else ""
+
+        review_btn = QToolButton()
+        review_btn.setObjectName("jobs-row-review-btn")
+        review_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        review_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        review_btn.setIcon(make_nav_icon("review", size=18, color_hex=_muted))
+        review_btn.setIconSize(QSize(18, 18))
+        review_btn.setFixedSize(22, 22)
+        review_btn.setToolTip("Open this file in Review")
+        review_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        review_btn.setAutoRaise(True)
+        review_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        review_btn.clicked.connect(lambda _=False, p=pk: self._open_review_for_path(p))
+        lay.addWidget(review_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        topics_btn = QToolButton()
+        topics_btn.setObjectName("jobs-row-topics-btn")
+        topics_btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
+        topics_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        topics_btn.setIcon(make_nav_icon("topics", size=18, color_hex=_muted))
+        topics_btn.setIconSize(QSize(18, 18))
+        topics_btn.setFixedSize(22, 22)
+        topics_btn.setToolTip("Open Topic Modeling")
+        topics_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        topics_btn.setAutoRaise(True)
+        topics_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        topics_btn.clicked.connect(lambda _=False: self._show_page("topics"))
+        lay.addWidget(topics_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
         btn = QToolButton()
         btn.setObjectName("jobs-row-open-btn")
         btn.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect, True)
         btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        _folder_muted = "#94a3b8" if self._theme == THEME_DARK else "#475569"
-        btn.setIcon(make_folder_open_icon(size=18, color_hex=_folder_muted))
+        btn.setIcon(make_folder_open_icon(size=18, color_hex=_muted))
         btn.setIconSize(QSize(18, 18))
         btn.setFixedSize(22, 22)
         btn.setToolTip("Open output folder")
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn.setAutoRaise(True)
-        pk = path_key.strip() if path_key else ""
         btn.clicked.connect(lambda _=False, p=pk: self._open_home_row_output_folder(p))
         lay.addWidget(btn, 0, Qt.AlignmentFlag.AlignVCenter)
         return w
@@ -2602,6 +2706,31 @@ class MainWindow(QMainWindow):
         self._sync_home_table_height()
         QTimer.singleShot(0, self._sync_home_table_height)
         QTimer.singleShot(0, self._sync_home_row_selection_styles)
+
+    def _restore_home_table_from_jobs(self) -> None:
+        """Rebuild Home file rows from persisted `_jobs` (audio still on disk)."""
+        if not hasattr(self, "table"):
+            return
+        for rec in reversed(self._jobs[:50]):
+            if not _is_persistable_job_status(rec.get("status", "")):
+                continue
+            fp = (rec.get("full_path") or "").strip()
+            if not fp or not os.path.isfile(fp):
+                continue
+            if self._find_table_row_for_path(fp) >= 0:
+                continue
+            fname = (rec.get("fname") or "").strip() or os.path.basename(fp)
+            duration = rec.get("duration")
+            if duration is None or duration == "":
+                duration = _get_audio_duration(fp)
+            else:
+                duration = str(duration)
+            status = (rec.get("status") or "Complete").strip() or "Complete"
+            self._append_table_row(fname, duration, status, full_path=fp)
+            row = self._find_table_row_for_path(fp)
+            if row >= 0:
+                pct = 100 if status == "Complete" else 0
+                self._update_table_row_status(row, status, pct=pct)
 
     def add_files_to_table(self, files: list[str]):
         added = 0
@@ -3156,6 +3285,49 @@ class MainWindow(QMainWindow):
 
             self.jobs_table.setRowHeight(row, HOME_TABLE_ROW_MIN_H)
         self._sync_jobs_empty_state()
+        self._save_jobs_history()
+
+    def _save_jobs_history(self) -> None:
+        """Persist Complete/Error/Failed/Cancelled job records to QSettings."""
+        try:
+            persistable = [
+                rec for rec in self._jobs
+                if _is_persistable_job_status(rec.get("status", ""))
+            ][:JOBS_HISTORY_MAX]
+            self._settings().setValue(KEY_JOBS_HISTORY, json.dumps(persistable))
+        except Exception:
+            return
+
+    def _load_jobs_history(self) -> list[dict]:
+        """Read persisted job history, dropping entries whose files are gone."""
+        try:
+            raw = self._settings().value(KEY_JOBS_HISTORY, "")
+        except Exception:
+            return []
+        if not raw:
+            return []
+        try:
+            data = json.loads(raw if isinstance(raw, str) else str(raw))
+        except Exception:
+            return []
+        if not isinstance(data, list):
+            return []
+
+        cleaned: list[dict] = []
+        for rec in data:
+            if not isinstance(rec, dict):
+                continue
+            paths = [
+                (rec.get("transcript_path") or "").strip(),
+                (rec.get("translation_path") or "").strip(),
+                (rec.get("full_path") or "").strip(),
+            ]
+            if not any(p and os.path.isfile(p) for p in paths):
+                continue
+            cleaned.append(rec)
+            if len(cleaned) >= JOBS_HISTORY_MAX:
+                break
+        return cleaned
 
     def _sync_jobs_empty_state(self) -> None:
         if not hasattr(self, "jobs_table"):
@@ -3339,12 +3511,17 @@ class MainWindow(QMainWindow):
         self._apply_review_segment_highlight(idx)
 
     def _transcription_meta_path(self, out_dir: str, stem: str) -> str:
-        return os.path.join(out_dir, f"{stem}{TRANSCRIPTION_META_SUFFIX}")
+        return os.path.join(
+            out_dir, META_SUBDIR, f"{stem}{TRANSCRIPTION_META_SUFFIX}"
+        )
 
     def _read_transcription_meta(self, out_dir: str, stem: str) -> dict | None:
-        # Prefer the current sidecar name; fall back to the legacy
-        # `_transcription_meta.json` name so older runs still load.
+        # Prefer the new hidden ``.meta/`` location; fall back to the
+        # historical flat layout (and the older
+        # ``_transcription_meta.json`` filename) so previous runs load.
         candidates = [
+            os.path.join(out_dir, META_SUBDIR, f"{stem}{TRANSCRIPTION_META_SUFFIX}"),
+            os.path.join(out_dir, META_SUBDIR, f"{stem}{LEGACY_TRANSCRIPTION_META_SUFFIX}"),
             os.path.join(out_dir, f"{stem}{TRANSCRIPTION_META_SUFFIX}"),
             os.path.join(out_dir, f"{stem}{LEGACY_TRANSCRIPTION_META_SUFFIX}"),
         ]
@@ -3376,8 +3553,10 @@ class MainWindow(QMainWindow):
             "spanish_basename": os.path.basename(dst_spanish) if dst_spanish else "",
             "english_basename": os.path.basename(dst_english) if dst_english else "",
         }
+        target = self._transcription_meta_path(out_dir, stem)
         try:
-            with open(self._transcription_meta_path(out_dir, stem), "w", encoding="utf-8") as f:
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
         except OSError:
             pass
@@ -3509,12 +3688,8 @@ class MainWindow(QMainWindow):
         if engine_segments and os.path.isfile(engine_segments):
             segments_path = engine_segments
 
-        # Sidecar meta so Review's filesystem-scan fallback can show the
-        # original source filename as the row label and play back the
-        # source audio. Only written when we actually archived something;
-        # the stem key matches what _strip_archive_suffix returns on the
-        # just-renamed files, so _review_display_name / the scan path in
-        # _refresh_review_items pick it up.
+        # Sidecar meta keeps output metadata next to archived transcripts for
+        # any future reload/import flow without cluttering the output folder.
         if moved_any:
             self._write_transcription_meta(
                 out_dir,
@@ -3638,18 +3813,17 @@ class MainWindow(QMainWindow):
         # tags on disk start showing up under the new ISO-2 naming.
         self._migrate_legacy_output_filenames(out_dir)
         items: list[dict] = []
-        # Canonicalized audio stems already represented by a job record so
-        # the filesystem scan below doesn't double-add the same run.
-        seen_stems: set[str] = set()
 
-        # 1. Prefer recently completed jobs we already know about.
+        # Only show transcripts produced by jobs tracked in this app session.
         for rec in self._jobs:
             transcript_p = (rec.get("transcript_path") or rec.get("spanish_path") or "").strip()
             translation_p = (rec.get("translation_path") or rec.get("english_path") or "").strip()
             if rec.get("status") != "Complete":
                 continue
-            if not (transcript_p or translation_p):
+            if not transcript_p or not os.path.isfile(transcript_p):
                 continue
+            if translation_p and not os.path.isfile(translation_p):
+                translation_p = ""
             job_out = (rec.get("output_folder") or "").strip() or out_dir
             fname = (rec.get("fname") or "").strip()
             if not fname:
@@ -3660,15 +3834,13 @@ class MainWindow(QMainWindow):
                 fname = self._review_display_name(job_out, stem)
             if not fname:
                 fname = stem or "—"
-            if stem:
-                seen_stems.add(stem.casefold())
             seg_p = (rec.get("segments_path") or "").strip()
             if not seg_p and transcript_p:
-                cand = os.path.join(
+                cand = _resolve_sidecar(
                     job_out,
                     f"{self._strip_archive_suffix(transcript_p)}{REVIEW_SEGMENTS_SUFFIX}",
                 )
-                if os.path.isfile(cand):
+                if cand and os.path.isfile(cand):
                     seg_p = cand
             items.append(
                 {
@@ -3686,120 +3858,9 @@ class MainWindow(QMainWindow):
                 }
             )
 
-        # 2. Always scan the filesystem so historical runs and runs produced
-        #    by earlier sessions stay visible. Stems already represented by
-        #    a job record above are skipped via `seen_stems`.
-        if os.path.isdir(out_dir):
-            # Newest first so the "first-seen-wins" merge below prefers the
-            # most recent file when the same (stem, role, lang) slot has
-            # both a new-convention and a legacy file on disk.
-            entries: list[tuple[float, str, str]] = []
-            try:
-                for fn in os.listdir(out_dir):
-                    if not fn.lower().endswith(".txt"):
-                        continue
-                    full = os.path.join(out_dir, fn)
-                    try:
-                        mt = os.path.getmtime(full)
-                    except OSError:
-                        mt = 0.0
-                    entries.append((mt, fn, full))
-            except OSError:
-                entries = []
-            entries.sort(key=lambda e: e[0], reverse=True)
-
-            groups: dict[str, dict] = {}
-            for _mt, fn, full in entries:
-                stem_no_ext = fn[: -len(".txt")]
-                # Match either role with any language tag:
-                #   <stem>_transcription_<iso>.txt
-                #   <stem>_translation_<iso>.txt
-                key = ""
-                role = ""
-                lang = ""
-                for marker, role_name in (
-                    ("_transcription_", "transcript"),
-                    ("_translation_", "translation"),
-                ):
-                    idx = stem_no_ext.rfind(marker)
-                    if idx <= 0:
-                        continue
-                    key = stem_no_ext[:idx]
-                    lang = stem_no_ext[idx + len(marker):].lower()
-                    role = role_name
-                    break
-                if not key or not role:
-                    continue
-
-                # Normalize legacy full-word language tags. Old pipeline
-                # convention (pre-studio_engine):
-                #   <stem>_transcription_spanish.txt  -> source transcript (es)
-                #   <stem>_transcription_english.txt  -> translation (en)
-                # The second file was stamped with the `_transcription_`
-                # marker historically, but was really the translated output,
-                # so re-map role accordingly.
-                if lang == "spanish":
-                    lang = "es"
-                elif lang == "english":
-                    if role == "transcript":
-                        role = "translation"
-                    lang = "en"
-
-                g = groups.setdefault(key, {"folder": out_dir})
-                # First-seen-wins per role+lang slot. Because `entries` is
-                # sorted newest-first, newer ISO-2 files win over older
-                # legacy full-word duplicates for the same stem.
-                if role == "transcript":
-                    if not g.get("transcript_path"):
-                        g["transcript_path"] = full
-                        g["src_lang"] = lang
-                    if lang == "es" and not g.get("spanish_path"):
-                        g["spanish_path"] = full
-                    elif lang == "en" and not g.get("english_path"):
-                        g["english_path"] = full
-                else:
-                    if not g.get("translation_path"):
-                        g["translation_path"] = full
-                        g["tgt_lang"] = lang
-                    if lang == "en" and not g.get("english_path"):
-                        g["english_path"] = full
-                    elif lang == "es" and not g.get("spanish_path"):
-                        g["spanish_path"] = full
-
-            for key, g in groups.items():
-                if key.casefold() in seen_stems:
-                    continue
-                if not (g.get("transcript_path") or g.get("translation_path")):
-                    continue
-                # Resolve the meta sidecar from the directory of the matched
-                # file rather than the currently-configured out_dir so the
-                # sidecar still loads if the user switched output folders.
-                tx_path = g.get("transcript_path") or g.get("translation_path")
-                match_dir = os.path.dirname(tx_path) if tx_path else out_dir
-                meta = self._read_transcription_meta(match_dir, key)
-                ap = ""
-                if meta:
-                    ap = str(meta.get("source_full_path") or "").strip()
-                    if ap and not os.path.isfile(ap):
-                        ap = ""
-                seg_sidecar = os.path.join(match_dir, f"{key}{REVIEW_SEGMENTS_SUFFIX}")
-                seg_p = seg_sidecar if os.path.isfile(seg_sidecar) else ""
-                items.append(
-                    {
-                        "label": self._review_display_name(match_dir, key),
-                        "folder": g.get("folder", out_dir),
-                        "audio_path": ap,
-                        "transcript_path": g.get("transcript_path", ""),
-                        "translation_path": g.get("translation_path", ""),
-                        "segments_path": seg_p,
-                        "src_lang": g.get("src_lang", ""),
-                        "tgt_lang": g.get("tgt_lang", ""),
-                        "spanish_path": g.get("spanish_path", ""),
-                        "english_path": g.get("english_path", ""),
-                    }
-                )
-
         self._review_items = items[:200]
+        if hasattr(self, "_topics_page"):
+            self._topics_page.set_review_items(self._review_items)
         if not hasattr(self, "review_selector"):
             return
 
@@ -3808,9 +3869,12 @@ class MainWindow(QMainWindow):
 
         self.review_selector.blockSignals(True)
         self.review_selector.clear()
-        for it in self._review_items:
-            label = it.get("label", "")
-            self.review_selector.addItem(label)
+        if not self._review_items:
+            self.review_selector.addItem("No completed transcripts found", None)
+        else:
+            for it in self._review_items:
+                label = it.get("label", "")
+                self.review_selector.addItem(label, it)
         self.review_selector.blockSignals(False)
 
         # Restore selection if possible.
@@ -3827,6 +3891,8 @@ class MainWindow(QMainWindow):
                 self.review_selector.setCurrentIndex(0)
 
         if not self._review_items:
+            self.review_open_folder_btn.setEnabled(False)
+            self.review_analyze_topics_btn.setEnabled(False)
             self.review_info_path.setText("Run a job to generate .txt files, then come back to Review.")
             self.spanish_preview.setPlainText("")
             self.spanish_preview.setExtraSelections([])
@@ -3843,14 +3909,18 @@ class MainWindow(QMainWindow):
     def _selected_review_item(self) -> dict | None:
         if not hasattr(self, "review_selector"):
             return None
-        idx = self.review_selector.currentIndex()
-        if 0 <= idx < len(self._review_items):
-            return self._review_items[idx]
+        data = self.review_selector.currentData()
+        if isinstance(data, dict):
+            return data
         return None
 
     def _on_review_selection_changed(self):
         it = self._selected_review_item()
         if not it:
+            if hasattr(self, "review_open_folder_btn"):
+                self.review_open_folder_btn.setEnabled(False)
+            if hasattr(self, "review_analyze_topics_btn"):
+                self.review_analyze_topics_btn.setEnabled(False)
             if hasattr(self, "review_info_path"):
                 self.review_info_path.setText("")
             if hasattr(self, "spanish_preview"):
@@ -3865,6 +3935,12 @@ class MainWindow(QMainWindow):
             self._review_highlight_translation = False
             self._review_fallback_tx_lines = 0
             return
+
+        if hasattr(self, "review_open_folder_btn"):
+            self.review_open_folder_btn.setEnabled(bool((it.get("folder") or "").strip()))
+        if hasattr(self, "review_analyze_topics_btn"):
+            transcript_path = (it.get("transcript_path") or it.get("spanish_path") or "").strip()
+            self.review_analyze_topics_btn.setEnabled(bool(transcript_path and os.path.isfile(transcript_path)))
 
         # Load audio for the selected Review item (if available).
         ap = (it.get("audio_path") or "").strip()
@@ -3881,11 +3957,11 @@ class MainWindow(QMainWindow):
             self.review_edit_translation_btn.setChecked(False)
         seg_path = (it.get("segments_path") or "").strip()
         if not seg_path and transcript_p:
-            cand = os.path.join(
+            cand = _resolve_sidecar(
                 os.path.dirname(transcript_p),
                 f"{self._strip_archive_suffix(transcript_p)}{REVIEW_SEGMENTS_SUFFIX}",
             )
-            if os.path.isfile(cand):
+            if cand and os.path.isfile(cand):
                 seg_path = cand
         if not seg_path and ap and os.path.isfile(ap):
             audio_stem = os.path.splitext(os.path.basename(ap))[0]
@@ -3897,8 +3973,10 @@ class MainWindow(QMainWindow):
             elif folder:
                 side_dir = folder
             if side_dir:
-                cand2 = os.path.join(side_dir, f"{audio_stem}{REVIEW_SEGMENTS_SUFFIX}")
-                if os.path.isfile(cand2):
+                cand2 = _resolve_sidecar(
+                    side_dir, f"{audio_stem}{REVIEW_SEGMENTS_SUFFIX}"
+                )
+                if cand2 and os.path.isfile(cand2):
                     seg_path = cand2
 
         self._review_segments = self._load_review_segments_json(seg_path)

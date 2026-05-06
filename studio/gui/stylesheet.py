@@ -246,6 +246,17 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     border-radius: 4px;
 }
 
+#topics-page QToolButton#topics-browse-btn {
+    background-color: transparent;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0px;
+}
+#topics-page QToolButton#topics-browse-btn:hover {
+    border-color: #2563eb;
+    background-color: #f8fafc;
+}
+
 /* Topic page — quality strip + filter bar */
 #topics-quality-strip {
     background: transparent;
@@ -255,6 +266,19 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 #topics-filter-bar {
     background: transparent;
     padding: 4px 0px;
+}
+#topics-gpt4all-group {
+    background: #f0f5ff;
+    border-radius: 8px;
+    border-left: 2px solid #2563eb;
+    padding: 8px 10px;
+    margin-top: 4px;
+}
+QFrame#topics-empty-state {
+    background: transparent;
+}
+QFrame#topics-empty-state QLabel {
+    background: transparent;
 }
 
 /* Topic page — map / detail panes */
@@ -885,6 +909,17 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     border-radius: 4px;
 }
 
+#topics-page QToolButton#topics-browse-btn {
+    background-color: transparent;
+    border: 1.5px solid #334155;
+    border-radius: 8px;
+    padding: 0px;
+}
+#topics-page QToolButton#topics-browse-btn:hover {
+    border-color: #3b82f6;
+    background-color: #161c2e;
+}
+
 /* Topic page — quality strip + filter bar (dark) */
 #topics-quality-strip {
     background: transparent;
@@ -894,6 +929,19 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
 #topics-filter-bar {
     background: transparent;
     padding: 4px 0px;
+}
+#topics-gpt4all-group {
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
+    border-left: 2px solid #2563eb;
+    padding: 8px 10px;
+    margin-top: 4px;
+}
+QFrame#topics-empty-state {
+    background: transparent;
+}
+QFrame#topics-empty-state QLabel {
+    background: transparent;
 }
 
 /* Topic page — map / detail panes (dark) */

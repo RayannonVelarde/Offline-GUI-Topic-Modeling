@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from nav_icons import make_disclosure_chevron_icon, make_folder_open_icon
+from nav_icons import make_disclosure_chevron_icon, make_folder_open_icon, make_nav_icon
 from llm_assistant import LLMAssistantPanel, TOPIC_QUICK_ACTIONS, _TOPIC_SYSTEM
 
 # Path resolution: topic_modeling/src lives two levels above this file
@@ -242,21 +242,34 @@ class TopicModelingPage(QFrame):
         input_lbl = QLabel("Input (.txt file or folder):")
         input_lbl.setObjectName("settings-label")
         input_lbl.setFixedWidth(_TOPICS_LABEL_W)
-        self._input_edit = QLineEdit()
-        self._input_edit.setObjectName("settings-input")
-        self._input_edit.setPlaceholderText("Select a transcript file or folder…")
-        self._input_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._input_edit.editingFinished.connect(self._on_input_path_committed)
-        browse_file_btn = QPushButton("File…")
-        browse_file_btn.setObjectName("add-btn")
-        browse_file_btn.clicked.connect(self._browse_file)
-        browse_folder_btn = QPushButton("Folder…")
-        browse_folder_btn.setObjectName("add-btn")
-        browse_folder_btn.clicked.connect(self._browse_folder)
+        self._input_selector = QComboBox()
+        self._input_selector.setObjectName("settings-input")
+        self._input_selector.setMinimumWidth(220)
+        self._input_selector.currentIndexChanged.connect(self._on_input_selection_changed)
+        self._input_selector.addItem("Select a completed transcript or browse…", "")
+        browse_icon_color = "#94a3b8" if (self._theme_getter and self._theme_getter() == "dark") else "#475569"
+        self._browse_file_btn = QToolButton()
+        self._browse_file_btn.setObjectName("topics-browse-btn")
+        self._browse_file_btn.setToolTip("Select transcript file")
+        self._browse_file_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._browse_file_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._browse_file_btn.setIcon(make_nav_icon("review", size=18, color_hex=browse_icon_color))
+        self._browse_file_btn.setIconSize(QSize(18, 18))
+        self._browse_file_btn.setFixedSize(36, 36)
+        self._browse_file_btn.clicked.connect(self._browse_file)
+        self._browse_folder_btn = QToolButton()
+        self._browse_folder_btn.setObjectName("topics-browse-btn")
+        self._browse_folder_btn.setToolTip("Select transcript folder")
+        self._browse_folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._browse_folder_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._browse_folder_btn.setIcon(make_folder_open_icon(size=18, color_hex=browse_icon_color))
+        self._browse_folder_btn.setIconSize(QSize(18, 18))
+        self._browse_folder_btn.setFixedSize(36, 36)
+        self._browse_folder_btn.clicked.connect(self._browse_folder)
         input_row.addWidget(input_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
-        input_row.addWidget(self._input_edit, 1)
-        input_row.addWidget(browse_file_btn, 0)
-        input_row.addWidget(browse_folder_btn, 0)
+        input_row.addWidget(self._input_selector, 1)
+        input_row.addWidget(self._browse_file_btn, 0)
+        input_row.addWidget(self._browse_folder_btn, 0)
         body_lay.addLayout(input_row)
 
         # Interviewer speaker row
@@ -269,24 +282,29 @@ class TopicModelingPage(QFrame):
         self._speaker_combo.setObjectName("settings-input")
         self._speaker_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._speaker_combo.addItem("None — include all speakers", None)
+        self._speaker_combo.setToolTip(
+            "Choose the interviewer speaker label to exclude their questions from topic modeling."
+        )
         spk_row.addWidget(spk_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         spk_row.addWidget(self._speaker_combo, 1)
         body_lay.addLayout(spk_row)
 
-        speaker_hint = QLabel(
-            "Choose the interviewer speaker label to exclude their questions from topic modeling."
-        )
-        speaker_hint.setObjectName("settings-hint")
-        body_lay.addWidget(speaker_hint)
+        # Visually group the GPT4All toggle + model name field so it's
+        # obvious the model field belongs to the checkbox above it.
+        gpt4all_group = QFrame()
+        gpt4all_group.setObjectName("topics-gpt4all-group")
+        gpt4all_group.setAttribute(Qt.WA_StyledBackground, True)
+        gpt4all_group_lay = QVBoxLayout(gpt4all_group)
+        gpt4all_group_lay.setContentsMargins(10, 6, 10, 6)
+        gpt4all_group_lay.setSpacing(6)
 
-        # GPT4All labeling row
         gpt4all_row = QHBoxLayout()
         self._gpt4all_checkbox = QCheckBox("Enable GPT4All LLM topic labeling")
         self._gpt4all_checkbox.setObjectName("job-options-checkbox")
         self._gpt4all_checkbox.toggled.connect(self._sync_gpt4all_model_enabled)
         gpt4all_row.addWidget(self._gpt4all_checkbox)
         gpt4all_row.addStretch(1)
-        body_lay.addLayout(gpt4all_row)
+        gpt4all_group_lay.addLayout(gpt4all_row)
 
         model_row = QHBoxLayout()
         model_row.setSpacing(10)
@@ -298,7 +316,9 @@ class TopicModelingPage(QFrame):
         self._model_edit.setEnabled(False)
         model_row.addWidget(model_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         model_row.addWidget(self._model_edit, 1)
-        body_lay.addLayout(model_row)
+        gpt4all_group_lay.addLayout(model_row)
+
+        body_lay.addWidget(gpt4all_group)
 
         options_lay.addWidget(self._options_body)
         outer.addWidget(options_card)
@@ -479,16 +499,38 @@ class TopicModelingPage(QFrame):
         self._did_equal_topic_split = True
 
     def _add_empty_results_placeholder(self) -> None:
-        self._no_results_lbl = QLabel("Run the pipeline to see topic results here.")
-        self._no_results_lbl.setObjectName("topics-results-empty")
-        self._no_results_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._no_results_lbl.setWordWrap(True)
-        self._no_results_lbl.setSizePolicy(
+        empty = QFrame()
+        empty.setObjectName("topics-empty-state")
+        empty.setAttribute(Qt.WA_StyledBackground, True)
+        empty.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Preferred,
         )
+        empty_lay = QVBoxLayout(empty)
+        empty_lay.setContentsMargins(12, 8, 12, 8)
+        empty_lay.setSpacing(6)
+        empty_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        icon_lbl = QLabel("◈")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_lbl.setStyleSheet("font-size: 32px; color: #94a3b8;")
+
+        title_lbl = QLabel("No results yet")
+        title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title_lbl.setStyleSheet("font-size: 14px; font-weight: 600; color: #64748b;")
+
+        sub_lbl = QLabel("Run the pipeline above to analyze your transcript.")
+        sub_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sub_lbl.setWordWrap(True)
+        sub_lbl.setStyleSheet("font-size: 12px; color: #94a3b8;")
+
+        empty_lay.addWidget(icon_lbl)
+        empty_lay.addWidget(title_lbl)
+        empty_lay.addWidget(sub_lbl)
+
+        self._no_results_lbl = empty
         self._results_inner_lay.addStretch(1)
-        self._results_inner_lay.addWidget(self._no_results_lbl)
+        self._results_inner_lay.addWidget(empty)
         self._results_inner_lay.addStretch(1)
 
     # ── Live progress feed ────────────────────────────────────────────────
@@ -691,15 +733,29 @@ class TopicModelingPage(QFrame):
             for sf in entry.get("source_files", []):
                 if sf:
                     sources.add(sf)
+        sorted_src = sorted(sources)
         self._filter_source_combo.blockSignals(True)
         self._filter_source_combo.clear()
-        self._filter_source_combo.addItem("All sources", None)
-        for src in sorted(sources):
-            self._filter_source_combo.addItem(src, src)
+        if len(sorted_src) == 0:
+            # No per-topic paths in JSON — show which result file / run this is.
+            fallback = (
+                os.path.basename(self._current_source_path)
+                if getattr(self, "_current_source_path", None)
+                else ""
+            )
+            if fallback:
+                self._filter_source_combo.addItem(fallback, None)
+        elif len(sorted_src) == 1:
+            s = sorted_src[0]
+            self._filter_source_combo.addItem(os.path.basename(s) or s, s)
+        else:
+            self._filter_source_combo.addItem("All sources", None)
+            for src in sorted_src:
+                self._filter_source_combo.addItem(os.path.basename(src) or src, src)
         self._filter_source_combo.blockSignals(False)
         if self._filter_minsize_spin:
             self._filter_minsize_spin.setValue(1)
-        self._filter_bar.setVisible(len(sources) > 0)
+        self._filter_bar.setVisible(self._filter_source_combo.count() > 0)
 
     def _apply_filters(self) -> None:
         if not self._current_summary:
@@ -722,9 +778,9 @@ class TopicModelingPage(QFrame):
         if self._inner_splitter and self._inner_splitter.isVisible():
             self._redraw_map_for_filter(filtered)
         else:
-            self._render_topic_cards(filtered, self._current_source_path)
+            self._render_topic_cards(filtered)
 
-    def _render_topic_cards(self, summary: list[dict], source_path: str) -> None:
+    def _render_topic_cards(self, summary: list[dict]) -> None:
         """Render (or re-render) only the scrollable card area; leaves quality/filter intact."""
         while self._results_inner_lay.count() > 0:
             item = self._results_inner_lay.takeAt(0)
@@ -742,9 +798,6 @@ class TopicModelingPage(QFrame):
             self._results_inner_lay.addStretch(1)
             return
 
-        src_lbl = QLabel(f"Source: {os.path.basename(source_path)}")
-        src_lbl.setObjectName("settings-label")
-        self._results_inner_lay.addWidget(src_lbl)
         for entry in summary:
             card = self._make_topic_card(entry)
             self._results_inner_lay.addWidget(card)
@@ -757,7 +810,7 @@ class TopicModelingPage(QFrame):
         if not summary:
             return
         self._results_scroll.setVisible(True)
-        self._render_topic_cards(summary, self._current_source_path)
+        self._render_topic_cards(summary)
 
     def _set_inner_split(self) -> None:
         sp = self._inner_splitter
@@ -788,7 +841,7 @@ class TopicModelingPage(QFrame):
     def _launch_map_worker(self, summary: list[dict]) -> None:
         if self._map_worker and self._map_worker.isRunning():
             return
-        input_path = self._input_edit.text().strip()
+        input_path = self._selected_input_path()
         stem = self._output_stem_for_input(input_path) if input_path else None
         if not stem:
             self._on_map_failed("Could not determine model path from input selection")
@@ -1134,6 +1187,10 @@ class TopicModelingPage(QFrame):
         col = "#94a3b8" if theme == "dark" else "#475569"
         self._open_output_btn.setIcon(make_folder_open_icon(size=18, color_hex=col))
         self._open_output_btn.setIconSize(QSize(18, 18))
+        self._browse_file_btn.setIcon(make_nav_icon("review", size=18, color_hex=col))
+        self._browse_file_btn.setIconSize(QSize(18, 18))
+        self._browse_folder_btn.setIcon(make_folder_open_icon(size=18, color_hex=col))
+        self._browse_folder_btn.setIconSize(QSize(18, 18))
         if self._options_chevron is not None and self._options_body is not None:
             self._refresh_options_chevron_icon(
                 expanded=self._options_body.isVisible()
@@ -1145,12 +1202,49 @@ class TopicModelingPage(QFrame):
         if not path:
             return
 
-        self._input_edit.setText(path)
+        self._select_input_path(path, label=os.path.basename(path))
         self._on_input_path_committed()
         self._append_log(
             f"[info] Loaded transcript for topic modeling: {os.path.basename(path)}",
             "#64748b",
         )
+
+    def set_review_items(self, items: list[dict]) -> None:
+        """Populate the input selector with the same transcript list shown on Review."""
+        current = self._selected_input_path()
+        entries: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for item in items:
+            path = (item.get("transcript_path") or item.get("spanish_path") or "").strip()
+            if not path or path in seen or not os.path.isfile(path):
+                continue
+            seen.add(path)
+            label = (item.get("label") or os.path.basename(path)).strip()
+            entries.append((label, path))
+
+        self._input_selector.blockSignals(True)
+        self._input_selector.clear()
+        if not entries:
+            self._input_selector.addItem("No completed transcripts found", "")
+        else:
+            for label, path in entries:
+                self._input_selector.addItem(label, path)
+        self._input_selector.blockSignals(False)
+
+        if current:
+            self._select_input_path(current)
+        elif entries:
+            self._input_selector.setCurrentIndex(0)
+            self._on_input_path_committed()
+
+    def _add_input_history_path(self, path: str, label: str) -> None:
+        path = (path or "").strip()
+        if not path or self._input_selector.findData(path) >= 0:
+            return
+        placeholder_idx = self._input_selector.findData("")
+        if placeholder_idx >= 0 and self._input_selector.count() == 1:
+            self._input_selector.removeItem(placeholder_idx)
+        self._input_selector.addItem(label, path)
 
     def refresh_theme(self) -> None:
         """Align topic page with app light/dark after MainWindow applies theme."""
@@ -1165,30 +1259,50 @@ class TopicModelingPage(QFrame):
     def _sync_gpt4all_model_enabled(self, checked: bool) -> None:
         self._model_edit.setEnabled(checked)
 
+    def _selected_input_path(self) -> str:
+        data = self._input_selector.currentData()
+        if isinstance(data, str):
+            return data.strip()
+        return self._input_selector.currentText().strip()
+
+    def _select_input_path(self, path: str, label: str | None = None) -> None:
+        path = (path or "").strip()
+        if not path:
+            self._input_selector.setCurrentIndex(0)
+            return
+        idx = self._input_selector.findData(path)
+        if idx < 0:
+            self._add_input_history_path(path, label or os.path.basename(path))
+            idx = self._input_selector.count() - 1
+        self._input_selector.setCurrentIndex(idx)
+
     def _browse_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Select transcript file",
-            self._input_edit.text().strip() or _PROJECT_ROOT,
+            self._selected_input_path() or _PROJECT_ROOT,
             "Text files (*.txt);;All Files (*)",
         )
         if path:
-            self._input_edit.setText(path)
+            self._select_input_path(path, label=os.path.basename(path))
             self._on_input_path_committed()
 
     def _browse_folder(self) -> None:
         path = QFileDialog.getExistingDirectory(
             self,
             "Select transcript folder",
-            self._input_edit.text().strip() or _PROJECT_ROOT,
+            self._selected_input_path() or _PROJECT_ROOT,
         )
         if path:
-            self._input_edit.setText(path)
+            self._select_input_path(path, label=os.path.basename(os.path.normpath(path)))
             self._on_input_path_committed()
+
+    def _on_input_selection_changed(self, _index: int = -1) -> None:
+        self._on_input_path_committed()
 
     def _on_input_path_committed(self) -> None:
         """Refresh anything that depends on the current input path."""
-        path = self._input_edit.text().strip()
+        path = self._selected_input_path()
         if path == self._last_transcript_path:
             return
         self._last_transcript_path = path
@@ -1279,7 +1393,7 @@ class TopicModelingPage(QFrame):
 
     def _refresh_speaker_dropdown(self) -> None:
         """Populate the interviewer dropdown using speaker labels found in the selected input."""
-        input_path = self._input_edit.text().strip()
+        input_path = self._selected_input_path()
 
         current_value = self._speaker_combo.currentData()
 
@@ -1409,7 +1523,7 @@ class TopicModelingPage(QFrame):
             QMessageBox.warning(self, "Topic Modeling", "The pipeline is already running.")
             return
 
-        input_path = self._input_edit.text().strip()
+        input_path = self._selected_input_path()
         if not input_path:
             self._append_log("[error] Please select an input transcript file or folder.", "#ef4444")
             QMessageBox.warning(
@@ -1595,7 +1709,7 @@ class TopicModelingPage(QFrame):
 
     def _load_latest_results(self) -> None:
         """Load topic results for the selected input, falling back to newest summary."""
-        input_path = self._input_edit.text().strip()
+        input_path = self._selected_input_path()
         if input_path and os.path.exists(input_path):
             self._load_results_for_input(input_path, warn_if_missing=True)
             return
@@ -1709,7 +1823,7 @@ class TopicModelingPage(QFrame):
         Find the original transcript file based on the GUI input path and source_file saved
         in the topic summary JSON.
         """
-        input_path = self._input_edit.text().strip()
+        input_path = self._selected_input_path()
 
         if not input_path:
             return None

@@ -380,6 +380,7 @@ class LLMAssistantPanel(QFrame):
         self._msg_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._welcome = self._make_welcome()
+        self._msg_layout.addStretch(1)
         self._msg_layout.addWidget(self._welcome)
         self._msg_layout.addStretch(1)
 
@@ -431,9 +432,11 @@ class LLMAssistantPanel(QFrame):
     def _make_welcome(self) -> QWidget:
         w = QWidget()
         w.setStyleSheet("background:transparent;")
+        w.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(8, 20, 8, 8)
+        lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         icon = QLabel("✦")
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -594,12 +597,15 @@ class LLMAssistantPanel(QFrame):
         if self._is_streaming:
             return
 
-        # Hide welcome on first message
+        # Hide welcome on first message and remove the centering stretches
         if self._welcome.isVisible():
             self._welcome.hide()
-            item = self._msg_layout.takeAt(self._msg_layout.count() - 1)
-            if item:
-                del item
+            i = self._msg_layout.count() - 1
+            while i >= 0:
+                item = self._msg_layout.itemAt(i)
+                if item is not None and item.spacerItem() is not None:
+                    self._msg_layout.takeAt(i)
+                i -= 1
 
         self._add_bubble(text, "user")
 
@@ -691,6 +697,7 @@ class LLMAssistantPanel(QFrame):
                 item.widget().deleteLater()
 
         self._welcome = self._make_welcome()
+        self._msg_layout.addStretch(1)
         self._msg_layout.addWidget(self._welcome)
         self._msg_layout.addStretch(1)
 
