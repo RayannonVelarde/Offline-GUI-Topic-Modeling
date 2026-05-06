@@ -20,9 +20,11 @@ Subprocess contract (called by studio/gui/main_window.py):
 Outputs (written to --output-dir, default = this script's directory so the
 GUI rename logic in _archive_latest_outputs_for_job finds them):
 
-    transcription_<src_iso>.txt   (always; e.g. transcription_es.txt)
-    translation_<tgt_iso>.txt     (only when --translate != none; e.g. translation_en.txt)
-    <audio_stem>_segments.json    (always; segment timing + text for Review / tooling)
+    transcription_<src_iso>.txt          (always; e.g. transcription_es.txt)
+    translation_<tgt_iso>.txt            (only when --translate != none; e.g. translation_en.txt)
+    .meta/<audio_stem>_segments.json     (always; segment timing + text for Review / tooling.
+                                          Hidden subfolder so the user-facing output dir
+                                          only shows the .txt files.)
 
 stdout:
     Free-text `[engine] …` log lines for the GUI's log panel.
@@ -978,7 +980,14 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
             config.timestamps,
         )
 
-    review_segments_path = config.output_dir / f"{config.audio_path.stem}_segments.json"
+    # JSON sidecars live in a hidden ``.meta`` subfolder so the user-facing
+    # outputs directory only shows the .txt transcripts/translations.
+    meta_dir = config.output_dir / ".meta"
+    try:
+        meta_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        meta_dir = config.output_dir
+    review_segments_path = meta_dir / f"{config.audio_path.stem}_segments.json"
     stage_write_review_segments(
         result_source,
         result_translation,

@@ -59,23 +59,36 @@ def build_topic_model(n_docs=None):
     vectorizer_model = CountVectorizer(stop_words=custom_stop_words)
 
     # Scale the dimensionality-reduction + clustering parameters with the
-    # number of documents. UMAP requires n_neighbors < n_docs and
-    # n_components < n_docs; HDBSCAN's min_cluster_size must be at least 2
-    # but not larger than the dataset. Without this, small transcripts
-    # crash with "k must be <= number of training points".
+    # number of documents. UMAP requires n_neighbors < n_docs (and the
+    # spectral fallback used internally can crash when k >= N for tiny N).
+    # Avoid forcing n_neighbors to 2 when the dataset only has 1–2 rows.
     if n_docs is None or n_docs <= 0:
         n_docs = 30  # legacy default sizing
 
-    n_neighbors = max(2, min(15, n_docs - 1))
-    n_components = max(2, min(5, n_docs - 1))
+    if n_docs == 1:
+        n_neighbors = 1
+        n_components = 1
+        umap_init = "random"
+    elif n_docs == 2:
+        n_neighbors = 1
+        n_components = 1
+        umap_init = "random"
+    else:
+        n_neighbors = max(2, min(15, n_docs - 1))
+        n_components = max(2, min(5, n_docs - 1))
+        umap_init = "spectral" if n_docs >= 8 else "random"
+
     min_cluster_size = max(2, min(4, max(2, n_docs // 4)))
+    if n_docs < 4:
+        min_cluster_size = min(min_cluster_size, n_docs)
 
     umap_model = UMAP(
         n_neighbors=n_neighbors,
         n_components=n_components,
         min_dist=0.0,
         metric="cosine",
-        random_state=42
+        random_state=42,
+        init=umap_init,
     )
 
     hdbscan_model = HDBSCAN(
