@@ -275,8 +275,8 @@ Built over 8 weeks by a 3-person student team.
 | Team Member | Main Contributions |
 |---|---|
 | Lucas Montoya | Speech-to-text studio GUI, transcription backend integration, diarization/translation workflow, review page, output handling |
-| Rayannon | BERTopic topic modeling pipeline, transcript preprocessing, topic modeling page integration |
-| Chris | UI support, testing, documentation, integration support |
+| Rayannon Velarde | BERTopic topic modeling pipeline, transcript preprocessing, topic modeling page integration |
+| Christian Gabriel Cabales | UI support, testing, documentation, integration support |
 
 ---
 
