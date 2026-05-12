@@ -14,6 +14,8 @@ Offline Studio lets users upload audio files, generate speaker-labeled transcrip
 
 Most transcription tools stop at the transcript. Most topic modeling tools expect clean, pre-processed text. This project chains both pipelines inside a single local interface, with speaker-aware preprocessing that lets researchers exclude interviewer turns before analysis — a gap we did not find in existing open-source tools.
 
+<img width="220" height="220" alt="cat-tongue-cat" src="https://github.com/user-attachments/assets/dd0b41f4-7368-449f-84ff-0f31b33c5303" />
+
 ---
 
 ## Target Users
