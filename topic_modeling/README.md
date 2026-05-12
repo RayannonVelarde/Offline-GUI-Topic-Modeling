@@ -7,7 +7,7 @@ Simple offline pipeline for preprocessing transcripts and generating topics usin
 1. Preprocess transcript(s) → CSV
 2. Generate embeddings + run BERTopic
 3. Output topics, keywords, and examples
-4. (Optional) Generate topic labels with a local LLM (Ollama)
+4. (Optional) Generate topic labels with a local LLM (GPT4All)
 
 ## Setup
 
@@ -33,19 +33,15 @@ models/paraphrase-multilingual-MiniLM-L12-v2/
 
 This step only needs to be done once.
 
-### Optional: Local LLM (Ollama for labeling)
+### Optional: Local LLM (GPT4All for labeling)
 
-Install Ollama and download a model:
+GPT4All is installed with `pip install -r requirements.txt` (see `gpt4all` in the requirements). On first use, GPT4All will automatically download the chosen `.gguf` model file into `~/.cache/gpt4all/`. The default model is:
 
-```bash
-ollama pull llama3.1
+```text
+mistral-7b-openorca.Q4_0.gguf
 ```
 
-Start Ollama (if not already running):
-
-```bash
-ollama serve
-```
+No separate server needs to be running — labeling is performed in-process when you pass `--label`.
 
 ## Run
 
@@ -82,8 +78,10 @@ python pipeline.py <path_to_file_or_folder> --label
 ### Use a different model
 
 ```bash
-python pipeline.py <path_to_file_or_folder> --label mistral
+python pipeline.py <path_to_file_or_folder> --label mistral-7b-openorca.Q4_0.gguf
 ```
+
+Replace the filename with any GPT4All-compatible `.gguf` model name.
 
 ### Optional: exclude a speaker
 

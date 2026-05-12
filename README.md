@@ -33,16 +33,15 @@ Most transcription tools stop at the transcript. Most topic modeling tools expec
 - **Transcript review interface** with audio sync
 - **BERTopic topic modeling** for discovering themes across transcript files
 - **Speaker-aware preprocessing** to exclude interviewer turns before analysis
-- **Optional local LLM labeling** through Ollama
-- **Live logs** for transcription and topic modeling jobs
+- **Optional local LLM labeling** through GPT4All (default model: `mistral-7b-openorca.Q4_0.gguf`)
+- **Built-in offline AI assistant** on the Topic Modeling page (also GPT4All) for asking questions about topics and the transcript
+- **Live progress feedback** — streaming transcription logs and a per-stage checklist for topic modeling
 - **Light/dark themed PySide6 interface**
 - **Local-first output** — all generated files stay on your machine
 
 ---
 
 ## Interface Preview
-
-> Replace these image paths with your actual screenshots or GIFs.
 
 ### Home — Upload and Configure Audio Jobs
 
@@ -78,7 +77,7 @@ Most transcription tools stop at the transcript. Most topic modeling tools expec
 The app is split into two main parts:
 
 1. **PySide6 Desktop GUI** — file selection, job configuration, progress logs, review pages, settings, and topic modeling controls.
-2. **Backend Processing Pipelines** — `studio_engine.py` handles transcription, diarization, and translation. `topic_modeling/src/pipeline.py` handles transcript preprocessing, BERTopic modeling, and optional Ollama-based labeling.
+2. **Backend Processing Pipelines** — `studio_engine.py` handles transcription, diarization, and translation. `topic_modeling/src/pipeline.py` handles transcript preprocessing, BERTopic modeling, and optional GPT4All-based labeling.
 
 The GUI launches backend jobs as separate processes to keep the interface responsive while longer tasks run in the background.
 
@@ -104,13 +103,14 @@ Users can:
 
 - Select a single `.txt` file or a folder of `.txt` files
 - Optionally exclude interviewer turns by speaker label, such as `SPEAKER_00`
-- Optionally enable Ollama LLM labeling
+- Optionally enable GPT4All LLM labeling and pick the local model name
 - Run the BERTopic pipeline from the GUI
-- View live logs while the pipeline runs
+- Watch a per-stage progress checklist (loading → preprocessing → BERTopic → done) with elapsed times
 - Review topic cards with keywords and example excerpts
 - Open the output folder when the pipeline finishes
+- Chat with a built-in offline AI assistant (also GPT4All) about the selected transcript and discovered topics
 
-Ollama labeling requires Ollama running locally with a compatible model such as `llama3.1`.
+GPT4All labeling requires the chosen `.gguf` model to be available locally (the app downloads it to `~/.cache/gpt4all/` on first use). The default is `mistral-7b-openorca.Q4_0.gguf`.
 
 ---
 
@@ -174,13 +174,13 @@ python main.py
 cd topic_modeling/src
 
 # Single file, no labeling
-python pipeline.py ../src/interview_dataset/interview_01_marisa.txt
+python pipeline.py interview_dataset/interview_01_marisa.txt
 
 # Folder, exclude SPEAKER_00 as interviewer
-python pipeline.py ../src/interview_dataset SPEAKER_00
+python pipeline.py interview_dataset SPEAKER_00
 
-# With Ollama labeling
-python pipeline.py ../src/interview_dataset SPEAKER_00 --label llama3.1
+# With GPT4All labeling (default model: mistral-7b-openorca.Q4_0.gguf)
+python pipeline.py interview_dataset SPEAKER_00 --label mistral-7b-openorca.Q4_0.gguf
 ```
 
 </details>
@@ -197,6 +197,7 @@ Offline-GUI-Topic-Modeling/
 │       ├── main.py                # Entry point — run this to launch the app
 │       ├── main_window.py         # Main window with all pages
 │       ├── topic_modeling_page.py # Topic Modeling page
+│       ├── llm_assistant.py       # Offline AI Assistant chat panel (GPT4All)
 │       ├── widgets.py             # Shared widgets
 │       ├── stylesheet.py          # Light/dark theme stylesheets
 │       └── nav_icons.py           # SVG nav icons
@@ -241,7 +242,7 @@ Known challenges included dependency setup, local model downloads, and performan
 
 **Backend jobs run separately from the GUI** — Transcription and topic modeling can take time. Separate backend processes keep the GUI responsive and make log streaming straightforward.
 
-**Offline-first workflow** — WhisperX, BERTopic, and Ollama allow the full pipeline to run without cloud services, which matters when audio contains sensitive content.
+**Offline-first workflow** — WhisperX, BERTopic, and GPT4All allow the full pipeline (transcription, topic modeling, and LLM labeling/assistant) to run without cloud services, which matters when audio contains sensitive content.
 
 **Transcript review before analysis** — Topic modeling is only useful if the transcript is understandable. The Review page lets users inspect output before running analysis.
 
@@ -303,7 +304,7 @@ Built over 8 weeks by a 3-person student team.
 - [pyannote.audio](https://github.com/pyannote/pyannote-audio) — speaker diarization
 - [BERTopic](https://github.com/MaartenGr/BERTopic) — topic modeling
 - [SentenceTransformers](https://www.sbert.net/) — text embeddings
-- [Ollama](https://ollama.com/) — optional local LLM topic labeling
+- [GPT4All](https://gpt4all.io/) — optional local LLM topic labeling and offline AI assistant
 - [PySide6](https://doc.qt.io/qtforpython/) — desktop GUI
 
 ---
