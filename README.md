@@ -6,7 +6,7 @@ Qualitative researchers often juggle tools just to go from a recorded interview 
 
 ## What It Does
 
-Offline Studio lets users upload audio files, generate speaker-labeled transcripts, review translations, and run topic modeling on transcript files — all locally. It combines a WhisperX-based speech-to-text studio with a BERTopic topic modeling pipeline inside one PySide6 desktop interface.
+Speech to Text Studio lets users upload audio files, generate speaker-labeled transcripts, review translations, and run topic modeling on transcript files — all locally. It combines a WhisperX-based speech-to-text studio with a BERTopic topic modeling pipeline inside one PySide6 desktop interface.
 
 ---
 
