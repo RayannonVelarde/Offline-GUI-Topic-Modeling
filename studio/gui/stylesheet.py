@@ -327,6 +327,19 @@ QPushButton#topics-ask-ai-btn:hover {
     border-radius: 4px;
 }
 
+#review-page QToolButton#review-input-folder-btn,
+#review-page QToolButton#review-analyze-topics-btn {
+    background-color: transparent;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 8px;
+    padding: 0px;
+}
+#review-page QToolButton#review-input-folder-btn:hover,
+#review-page QToolButton#review-analyze-topics-btn:hover {
+    border-color: #2563eb;
+    background-color: #f8fafc;
+}
+
 /* ── Review previews ── */
 #review-preview {
     background-color: #ffffff;
@@ -988,6 +1001,19 @@ QPushButton#topics-ask-ai-btn:hover {
 #review-page QToolButton#review-open-translation-btn:hover {
     background-color: rgba(255, 255, 255, 0.07);
     border-radius: 4px;
+}
+
+#review-page QToolButton#review-input-folder-btn,
+#review-page QToolButton#review-analyze-topics-btn {
+    background-color: transparent;
+    border: 1.5px solid #334155;
+    border-radius: 8px;
+    padding: 0px;
+}
+#review-page QToolButton#review-input-folder-btn:hover,
+#review-page QToolButton#review-analyze-topics-btn:hover {
+    border-color: #3b82f6;
+    background-color: #161c2e;
 }
 
 /* ── Review previews ── */
