@@ -1,4 +1,4 @@
-# Offline Studio — Local Audio Transcription & Topic Discovery for Qualitative Research
+# Offline Speech to Text Studio — Local Audio Transcription & Topic Discovery for Qualitative Research
 
 Qualitative researchers often juggle tools just to go from a recorded interview to organized insights. Most cloud-based options raise privacy concerns when audio contains sensitive subjects. This project collapses that workflow into one offline desktop app — no API keys, no uploads, no cloud dependency.
 
