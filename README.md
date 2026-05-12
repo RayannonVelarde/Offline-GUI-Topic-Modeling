@@ -45,19 +45,17 @@ Most transcription tools stop at the transcript. Most topic modeling tools expec
 
 ### Home — Upload and Configure Audio Jobs
 
-![Home page showing audio upload and job configuration](docs/images/home-page.png)
-
-### Jobs — Track Processing Progress
-
-![Jobs page showing active and completed transcription jobs](docs/images/jobs-page.png)
+<img width="1920" height="987" alt="Screenshot 2026-05-11 at 8 32 18 PM" src="https://github.com/user-attachments/assets/b848e982-1c26-4959-83bd-3a704cda54a1" /> 
 
 ### Review — Transcript, Translation, and Audio Playback
 
-![Review page showing transcript and translation review](docs/images/review-page.png)
+<img width="1919" height="988" alt="Screenshot 2026-05-11 at 8 37 40 PM" src="https://github.com/user-attachments/assets/9d2575d4-2952-4926-aba4-5e7fc942b514" />
+
 
 ### Topic Modeling — Discover Themes in Transcript Files
 
-![Topic modeling page showing topic cards and example excerpts](docs/images/topic-modeling-page.png)
+<img width="1920" height="989" alt="Screenshot 2026-05-11 at 8 45 59 PM" src="https://github.com/user-attachments/assets/78eb0af7-3fbc-4185-9f66-73dfd3db18e7" />
+
 
 ---
 
@@ -80,8 +78,6 @@ The app is split into two main parts:
 2. **Backend Processing Pipelines** — `studio_engine.py` handles transcription, diarization, and translation. `topic_modeling/src/pipeline.py` handles transcript preprocessing, BERTopic modeling, and optional GPT4All-based labeling.
 
 The GUI launches backend jobs as separate processes to keep the interface responsive while longer tasks run in the background.
-
-![System architecture diagram](docs/images/architecture-diagram.png)
 
 ---
 
@@ -283,7 +279,6 @@ Built over 8 weeks by a 3-person student team.
 
 ## Project Timeline
 
-![Project timeline Gantt chart](docs/images/gantt-chart.png)
 
 | Week | Sprint Focus |
 |---|---|
