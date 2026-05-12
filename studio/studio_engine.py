@@ -134,9 +134,7 @@ OPUS_MT_MODELS = {
 }
 
 
-# --------------------------------------------------------------------------- #
 # Config
-# --------------------------------------------------------------------------- #
 
 # Pyannote/WhisperX diarization: GUI and CLI both clamp --num-speakers to this
 # upper bound (typical conversations; larger values rarely help accuracy).
@@ -200,10 +198,7 @@ class EngineConfig:
         return transcript_path, self.output_dir / f"translation_{tgt_iso}.txt"
 
 
-# --------------------------------------------------------------------------- #
 # Logging and structured events
-# --------------------------------------------------------------------------- #
-
 
 Logger = Callable[[str], None]
 
@@ -238,10 +233,7 @@ def _emit_event(event: str, **kwargs) -> None:
     print(f"[event] {line}", file=sys.stderr, flush=True)
 
 
-# --------------------------------------------------------------------------- #
 # Torch / pickle compatibility
-# --------------------------------------------------------------------------- #
-
 
 def _apply_torch_compat() -> None:
     """
@@ -262,10 +254,7 @@ def _apply_torch_compat() -> None:
     torch.load = _trusted_load  # type: ignore[assignment]
 
 
-# --------------------------------------------------------------------------- #
 # Audio preprocessing (optional)
-# --------------------------------------------------------------------------- #
-
 
 def _maybe_preprocess_audio(
     audio_path: Path, mode: str, log: Logger
@@ -307,10 +296,7 @@ def _maybe_preprocess_audio(
     return out_path
 
 
-# --------------------------------------------------------------------------- #
 # Compute-type resolution
-# --------------------------------------------------------------------------- #
-
 
 def _resolve_compute_type(requested: str, device: str) -> str:
     """Expand ``"auto"`` to device-appropriate default; otherwise passthrough."""
@@ -319,10 +305,7 @@ def _resolve_compute_type(requested: str, device: str) -> str:
     return "float16" if device == "cuda" else "int8"
 
 
-# --------------------------------------------------------------------------- #
 # Stages — audio & ASR
-# --------------------------------------------------------------------------- #
-
 
 def stage_load_audio(log: Logger, audio_path: Path):
     import whisperx
@@ -396,10 +379,7 @@ def stage_align(segments, audio, device: str, language_code: str, log: Logger):
     )
 
 
-# --------------------------------------------------------------------------- #
 # Stages — diarization
-# --------------------------------------------------------------------------- #
-
 
 def stage_diarize(audio, config: EngineConfig, device: str, log: Logger):
     """
@@ -465,10 +445,7 @@ def stage_assign_speakers(diarize_df, result, log: Logger, label: str):
     return whisperx.assign_word_speakers(diarize_df, result)
 
 
-# --------------------------------------------------------------------------- #
 # Stages — speaker-change splitting
-# --------------------------------------------------------------------------- #
-
 
 def _dominant_speaker(words: Iterable[dict]) -> Optional[str]:
     """Pick the most common non-empty speaker across a list of words."""
@@ -551,10 +528,7 @@ def stage_split_segments_by_speaker(result, log: Logger, label: str):
     return new_result
 
 
-# --------------------------------------------------------------------------- #
 # Stages — dedicated MT (es -> en)
-# --------------------------------------------------------------------------- #
-
 
 def _build_mt_pipeline(
     src_iso: str,
@@ -632,10 +606,7 @@ def stage_translate_mt(
     return {"segments": translated_segments}
 
 
-# --------------------------------------------------------------------------- #
 # Output formatting
-# --------------------------------------------------------------------------- #
-
 
 def _format_timestamp(seconds) -> str:
     """Format seconds as HH:MM:SS.mmm. Returns --:--:--.--- for None/invalid."""
@@ -808,10 +779,7 @@ def stage_write_review_segments(
     )
 
 
-# --------------------------------------------------------------------------- #
 # Orchestration
-# --------------------------------------------------------------------------- #
-
 
 def _select_device() -> str:
     import torch
@@ -1010,10 +978,7 @@ def run(config: EngineConfig, log: Optional[Logger] = None) -> None:
     )
 
 
-# --------------------------------------------------------------------------- #
 # CLI
-# --------------------------------------------------------------------------- #
-
 
 def _parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(
