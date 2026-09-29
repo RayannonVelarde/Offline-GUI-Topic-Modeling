@@ -267,7 +267,7 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     background: transparent;
     padding: 4px 0px;
 }
-#topics-gpt4all-group {
+#topics-ollama-group {
     background: #f0f5ff;
     border-radius: 8px;
     border-left: 2px solid #2563eb;
@@ -293,20 +293,20 @@ QFrame#topics-empty-state QLabel {
     background: transparent;
 }
 
-/* Ask AI button (smaller than add-btn) */
-QPushButton#topics-ask-ai-btn {
-    background-color: transparent;
-    border: 1.5px solid #2563eb;
-    border-radius: 6px;
-    color: #2563eb;
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: 600;
-}
-QPushButton#topics-ask-ai-btn:hover {
-    background-color: #eff6ff;
-    color: #1d4ed8;
-}
+# /* Ask AI button (smaller than add-btn) */
+# QPushButton#topics-ask-ai-btn {
+#     background-color: transparent;
+#     border: 1.5px solid #2563eb;
+#     border-radius: 6px;
+#     color: #2563eb;
+#     padding: 3px 10px;
+#     font-size: 12px;
+#     font-weight: 600;
+# }
+# QPushButton#topics-ask-ai-btn:hover {
+#     background-color: #eff6ff;
+#     color: #1d4ed8;
+# }
 
 /* ── Review ── */
 #review-page QWidget {
@@ -669,18 +669,18 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
 
-/* ── AI Assistant panel (light) ── */
-#ai-assistant-panel {
-    background-color: #ffffff;
-    border: none;
-    border-radius: 0px;
-}
-#ai-header {
-    background-color: #f8fafc;
-    border-bottom: 1px solid #e2e8f0;
-    border-radius: 0px;
-}
-"""
+# /* ── AI Assistant panel (light) ── */
+# #ai-assistant-panel {
+#     background-color: #ffffff;
+#     border: none;
+#     border-radius: 0px;
+# }
+# #ai-header {
+#     background-color: #f8fafc;
+#     border-bottom: 1px solid #e2e8f0;
+#     border-radius: 0px;
+# }
+# """
 
 
 DARK_STYLESHEET = """
@@ -930,7 +930,7 @@ QSpinBox#settings-input::up-button, QSpinBox#settings-input::down-button {
     background: transparent;
     padding: 4px 0px;
 }
-#topics-gpt4all-group {
+#topics-ollama-group {
     background: rgba(255,255,255,0.04);
     border-radius: 8px;
     border-left: 2px solid #2563eb;
@@ -956,20 +956,20 @@ QFrame#topics-empty-state QLabel {
     background: transparent;
 }
 
-/* Ask AI button (dark) */
-QPushButton#topics-ask-ai-btn {
-    background-color: transparent;
-    border: 1.5px solid #3b82f6;
-    border-radius: 6px;
-    color: #3b82f6;
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: 600;
-}
-QPushButton#topics-ask-ai-btn:hover {
-    background-color: #1e2d4a;
-    color: #60a5fa;
-}
+# /* Ask AI button (dark) */
+# QPushButton#topics-ask-ai-btn {
+#     background-color: transparent;
+#     border: 1.5px solid #3b82f6;
+#     border-radius: 6px;
+#     color: #3b82f6;
+#     padding: 3px 10px;
+#     font-size: 12px;
+#     font-weight: 600;
+# }
+# QPushButton#topics-ask-ai-btn:hover {
+#     background-color: #1e2d4a;
+#     color: #60a5fa;
+# }
 
 /* ── Review ── */
 #review-page QWidget {
@@ -1321,17 +1321,17 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0px;
 }
 
-/* ── AI Assistant panel (dark) ── */
-#ai-assistant-panel {
-    background-color: #141720;
-    border: none;
-    border-radius: 0px;
-}
-#ai-header {
-    background-color: #0f1117;
-    border-bottom: 1px solid #1e2433;
-    border-radius: 0px;
-}
+# /* ── AI Assistant panel (dark) ── */
+# #ai-assistant-panel {
+#     background-color: #141720;
+#     border: none;
+#     border-radius: 0px;
+# }
+# #ai-header {
+#     background-color: #0f1117;
+#     border-bottom: 1px solid #1e2433;
+#     border-radius: 0px;
+# }
 """
 
 

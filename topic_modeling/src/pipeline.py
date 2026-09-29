@@ -51,10 +51,16 @@ def run_pipeline(input_path, interviewer_speaker=None, use_labeling=False, ollam
     print(f"Topic model: {topic_model_path}")
     print(f"Topic summary: {topic_summary_json}")
 
+    # Changing to Ollama
+    # if use_labeling:
+    #     print(f"GPT4All labeling: enabled ({ollama_model})")
+    # else:
+    #     print("GPT4All labeling: disabled")
+
     if use_labeling:
-        print(f"GPT4All labeling: enabled ({ollama_model})")
+        print(f"Ollama labeling: enabled ({ollama_model})")
     else:
-        print("GPT4All labeling: disabled")
+        print("Ollama labeling: disabled")
 
 # CLI entry
 if __name__ == "__main__":

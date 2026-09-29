@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import shutil
+import urllib.error
+import urllib.request
 from pathlib import Path
 import pandas as pd
 from sentence_transformers import SentenceTransformer
@@ -201,7 +203,7 @@ def save_topic_summary(topic_summary, original_name):
     print(f"Topic summary saved to {output_file}")
     return output_file
     
-# generate a short label for one topic using GPT4All (fully offline)
+# generate a short label for one topic using Ollama (fully offline)
 def _build_label_prompt(topic_entry):
     examples = topic_entry.get("examples", [])
     ex_lines = "\n".join(
@@ -215,31 +217,89 @@ def _build_label_prompt(topic_entry):
         f"Representative excerpts:\n{ex_lines}"
     )
 
+def _ollama_generate(prompt, model_name, base_url="http://127.0.0.1:11434", timeout=120):
+    payload = json.dumps({
+        "model": model_name,
+        "prompt": prompt,
+        "stream": False,
+        "options": {
+            "temperature": 0.1,
+            "num_predict": 30
+        }
+    }).encode("utf-8")
+
+    request = urllib.request.Request(
+        f"{base_url.rstrip('/')}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        result = json.loads(response.read().decode("utf-8"))
+
+    return result.get("response", "").strip()
 
 # add GPT4All labels to all topics (loads model once for efficiency)
-def add_llm_labels(topic_summary, model_name="mistral-7b-openorca.Q4_0.gguf"):
-    try:
-        from gpt4all import GPT4All
-    except ImportError:
-        print("[warn] gpt4all is not installed — skipping LLM labeling.")
-        return topic_summary
+# def add_llm_labels(topic_summary, model_name="mistral-7b-openorca.Q4_0.gguf"):
+#     try:
+#         from gpt4all import GPT4All
+#     except ImportError:
+#         print("[warn] gpt4all is not installed — skipping LLM labeling.")
+#         return topic_summary
 
-    try:
-        model = GPT4All(model_name, verbose=False)
-    except Exception as e:
-        print(f"[error] Could not load GPT4All model '{model_name}': {e}")
-        return topic_summary
+#     try:
+#         gpt4all_path = os.path.expanduser("~/.cache/gpt4all/")
+#         print(f"\n GPT4ALL PATH: {gpt4all_path}")
+#         model = GPT4All(model_name, verbose=False, model_path=gpt4all_path, allow_download=False)
+#     except Exception as e:
+#         print(f"[error] Could not load GPT4All model '{model_name}': {e}")
+#         return topic_summary
+
+#     labeled_summary = []
+#     for entry in topic_summary:
+#         entry_copy = entry.copy()
+#         try:
+#             prompt = _build_label_prompt(entry_copy)
+#             with model.chat_session():
+#                 raw = model.generate(prompt, max_tokens=30).strip()
+#             label = raw.splitlines()[0].strip('" ') if raw else None
+#             entry_copy["generated_label"] = label
+#             print(f"Generated label for Topic {entry_copy['topic_id']}: {label}")
+#         except Exception as e:
+#             print(f"Could not generate label for Topic {entry_copy['topic_id']}: {e}")
+#             entry_copy["generated_label"] = None
+#         labeled_summary.append(entry_copy)
+
+#     return labeled_summary
+
+# add Ollama-generated labels to all topics
+def add_llm_labels(topic_summary, model_name="llama3.1", base_url="http://127.0.0.1:11434"):
+    print(f"\nUsing Ollama model '{model_name}' at {base_url}")
 
     labeled_summary = []
     for entry in topic_summary:
         entry_copy = entry.copy()
         try:
             prompt = _build_label_prompt(entry_copy)
-            with model.chat_session():
-                raw = model.generate(prompt, max_tokens=30).strip()
+            raw = _ollama_generate(prompt, model_name, base_url=base_url)
             label = raw.splitlines()[0].strip('" ') if raw else None
             entry_copy["generated_label"] = label
             print(f"Generated label for Topic {entry_copy['topic_id']}: {label}")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            print(
+                f"Could not generate label for Topic {entry_copy['topic_id']}: "
+                f"Ollama returned HTTP {e.code}: {detail}"
+            )
+            entry_copy["generated_label"] = None
+        except urllib.error.URLError as e:
+            print(
+                f"Could not connect to Ollama at {base_url}. "
+                f"Make sure Ollama is running and model '{model_name}' is installed. "
+                f"Details: {e.reason}"
+            )
+            entry_copy["generated_label"] = None
         except Exception as e:
             print(f"Could not generate label for Topic {entry_copy['topic_id']}: {e}")
             entry_copy["generated_label"] = None
@@ -280,7 +340,8 @@ if __name__ == "__main__":
     input_file = sys.argv[1]
 
     use_labeling = False
-    gpt4all_model_name = "mistral-7b-openorca.Q4_0.gguf"
+    # gpt4all_model_name = "mistral-7b-openorca.Q4_0.gguf"
+    ollama_model_name = "llama3.1"
 
     if len(sys.argv) >= 3 and sys.argv[2] == "--label":
         use_labeling = True
@@ -300,7 +361,7 @@ if __name__ == "__main__":
     topic_summary = build_topic_summary(topic_model, df, topics)
 
     if use_labeling:
-        topic_summary = add_llm_labels(topic_summary, model_name=gpt4all_model_name)
+        topic_summary = add_llm_labels(topic_summary, model_name=ollama_model_name)
 
     save_topic_summary(topic_summary, original_name)
     print_topic_summary(topic_model, topic_summary)

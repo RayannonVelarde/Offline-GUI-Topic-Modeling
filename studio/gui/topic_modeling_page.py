@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSplitter,
+    QTabWidget,
     QTextEdit,
     QToolButton,
     QVBoxLayout,
@@ -59,8 +60,8 @@ _TOPICS_LABEL_W = 236
 # Cap how much transcript text is shipped to the local LLM as context.
 # Even small models choke on huge prompts, and most on-device models have
 # 4K–8K context windows. We trim per-file and overall total.
-_AI_CONTEXT_PER_FILE_CHARS = 8000
-_AI_CONTEXT_TOTAL_CHARS = 24000
+# _AI_CONTEXT_PER_FILE_CHARS = 8000
+# _AI_CONTEXT_TOTAL_CHARS = 24000
 
 _SPINNER_CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
@@ -155,7 +156,7 @@ class TopicModelingPage(QFrame):
         self._theme_getter = theme_getter  # callable() → "light" | "dark"
         self._process: QProcess | None = None
         self._did_equal_topic_split = False
-        self._results_ai_splitter: QSplitter | None = None
+        # self._results_ai_splitter: QSplitter | None = None
         # Two separate context blobs, recombined and pushed to the AI panel
         # whenever either changes. This lets the chatbot reason about the
         # selected transcript even before any topic results exist.
@@ -289,36 +290,36 @@ class TopicModelingPage(QFrame):
         spk_row.addWidget(self._speaker_combo, 1)
         body_lay.addLayout(spk_row)
 
-        # Visually group the GPT4All toggle + model name field so it's
+        # Visually group the Ollama toggle + model name field so it's
         # obvious the model field belongs to the checkbox above it.
-        gpt4all_group = QFrame()
-        gpt4all_group.setObjectName("topics-gpt4all-group")
-        gpt4all_group.setAttribute(Qt.WA_StyledBackground, True)
-        gpt4all_group_lay = QVBoxLayout(gpt4all_group)
-        gpt4all_group_lay.setContentsMargins(10, 6, 10, 6)
-        gpt4all_group_lay.setSpacing(6)
+        ollama_group = QFrame()
+        ollama_group.setObjectName("topics-ollama-group")
+        ollama_group.setAttribute(Qt.WA_StyledBackground, True)
+        ollama_group_lay = QVBoxLayout(ollama_group)
+        ollama_group_lay.setContentsMargins(10, 6, 10, 6)
+        ollama_group_lay.setSpacing(6)
 
-        gpt4all_row = QHBoxLayout()
-        self._gpt4all_checkbox = QCheckBox("Enable GPT4All LLM topic labeling")
-        self._gpt4all_checkbox.setObjectName("job-options-checkbox")
-        self._gpt4all_checkbox.toggled.connect(self._sync_gpt4all_model_enabled)
-        gpt4all_row.addWidget(self._gpt4all_checkbox)
-        gpt4all_row.addStretch(1)
-        gpt4all_group_lay.addLayout(gpt4all_row)
+        ollama_row = QHBoxLayout()
+        self._ollama_checkbox = QCheckBox("Enable Ollama LLM topic labeling")
+        self._ollama_checkbox.setObjectName("job-options-checkbox")
+        self._ollama_checkbox.toggled.connect(self._sync_ollama_model_enabled)
+        ollama_row.addWidget(self._ollama_checkbox)
+        ollama_row.addStretch(1)
+        ollama_group_lay.addLayout(ollama_row)
 
         model_row = QHBoxLayout()
         model_row.setSpacing(10)
-        model_lbl = QLabel("GPT4All model name:")
+        model_lbl = QLabel("Ollama model name:")
         model_lbl.setObjectName("settings-label")
         model_lbl.setFixedWidth(_TOPICS_LABEL_W)
-        self._model_edit = QLineEdit("mistral-7b-openorca.Q4_0.gguf")
+        self._model_edit = QLineEdit("llama3.1")
         self._model_edit.setObjectName("settings-input")
         self._model_edit.setEnabled(False)
         model_row.addWidget(model_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
         model_row.addWidget(self._model_edit, 1)
-        gpt4all_group_lay.addLayout(model_row)
+        ollama_group_lay.addLayout(model_row)
 
-        body_lay.addWidget(gpt4all_group)
+        body_lay.addWidget(ollama_group)
 
         options_lay.addWidget(self._options_body)
         outer.addWidget(options_card)
@@ -331,10 +332,10 @@ class TopicModelingPage(QFrame):
         outer.addWidget(self._run_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
         # ── Bottom splitter: topic results | AI Assistant (50/50 on first layout) ──
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._results_ai_splitter = splitter
-        splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(8)
+        # splitter = QSplitter(Qt.Orientation.Horizontal)
+        # self._results_ai_splitter = splitter
+        # splitter.setChildrenCollapsible(False)
+        # splitter.setHandleWidth(8)
 
         # Results panel
         results_frame = QFrame()
@@ -421,6 +422,9 @@ class TopicModelingPage(QFrame):
         self._filter_bar.setVisible(False)
         results_vlay.addWidget(self._filter_bar)
 
+        self._results_tabs = QTabWidget()
+        self._results_tabs.setObjectName("topics-results-tabs")
+
         # Inset panel for scroll content (nested box inside the results card)
         results_body = QFrame()
         results_body.setObjectName("topics-results-body")
@@ -448,55 +452,98 @@ class TopicModelingPage(QFrame):
         self._results_scroll.setWidget(self._results_inner)
         results_body_lay.addWidget(self._results_scroll, 1)
 
+        self._results_tabs.addTab(results_body, "Topics")
+
+
+        visual_tabs = QTabWidget()
+        visual_tabs.setObjectName("topics-visual_tabs")
+
+        map_page = QWidget()
+        map_page_lay = QVBoxLayout(map_page)
+        map_page_lay.setContentsMargins(0, 0, 0, 0)
+        self._inner_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._inner_splitter.setChildrenCollapsible(False)
+        self._inner_splitter.setHandleWidth(8)
+
+        map_frame = QFrame()
+        map_frame.setObjectName("topics-results-body")
+        self._map_frame_lay = QVBoxLayout(map_frame)
+        self._map_frame_lay.setContentsMargins(8, 8, 8, 8)
+
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        detail_inner = QWidget()
+        self._detail_inner_lay = QVBoxLayout(detail_inner)
+        self._detail_inner_lay.setContentsMargins(12, 12, 12, 12)
+        self._detail_inner_lay.setSpacing(8)
+        detail_scroll.setWidget(detail_inner)
+
+        self._inner_splitter.addWidget(map_frame)
+        self._inner_splitter.addWidget(detail_scroll)
+        map_page_lay.addWidget(self._inner_splitter)
+        visual_tabs.addTab(map_page, "Topic map")
+
+        self._frequency_frame = QFrame()
+        self._frequency_frame.setObjectName("topics-results-body")
+        self._frequency_lay = QVBoxLayout(self._frequency_frame)
+        self._frequency_lay.setContentsMargins(12, 12, 12, 12)
+        visual_tabs.addTab(self._frequency_frame, "Frequency")
+
+        self._results_tabs.addTab(visual_tabs, "Visualizations")
+        results_vlay.addWidget(self._results_tabs, 1)
+
         # Dual-pane scatter map + detail view was removed — the empty plot felt
         # cluttered and not very informative. The scrollable cards view above
         # is now the sole results layout. Map/detail layout handles are kept as
         # `None` so existing helper methods stay safe no-ops.
-        self._inner_splitter = None
-        self._map_frame_lay = None
-        self._detail_inner_lay = None
-        results_vlay.addWidget(results_body, 1)
+        # self._inner_splitter = None
+        # self._map_frame_lay = None
+        # self._detail_inner_lay = None
+        # results_vlay.addWidget(results_body, 1)
 
         # AI Assistant panel (third pane)
-        ai_card = QFrame()
-        ai_card.setObjectName("settings-card")
-        ai_card_lay = QVBoxLayout(ai_card)
-        ai_card_lay.setContentsMargins(0, 0, 0, 0)
-        ai_card_lay.setSpacing(0)
+        # ai_card = QFrame()
+        # ai_card.setObjectName("settings-card")
+        # ai_card_lay = QVBoxLayout(ai_card)
+        # ai_card_lay.setContentsMargins(0, 0, 0, 0)
+        # ai_card_lay.setSpacing(0)
 
-        theme = self._theme_getter() if self._theme_getter else "light"
-        self._ai_panel = LLMAssistantPanel(
-            theme=theme,
-            system_prompt=_TOPIC_SYSTEM,
-            quick_actions=TOPIC_QUICK_ACTIONS,
-        )
-        ai_card_lay.addWidget(self._ai_panel)
+        # theme = self._theme_getter() if self._theme_getter else "light"
+        # self._ai_panel = LLMAssistantPanel(
+        #     theme=theme,
+        #     system_prompt=_TOPIC_SYSTEM,
+        #     quick_actions=TOPIC_QUICK_ACTIONS,
+        # )
+        # ai_card_lay.addWidget(self._ai_panel)
 
-        splitter.addWidget(results_frame)
-        splitter.addWidget(ai_card)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        # splitter.addWidget(results_frame)
+        # splitter.addWidget(ai_card)
+        # splitter.setStretchFactor(0, 1)
+        # splitter.setStretchFactor(1, 1)
 
-        outer.addWidget(splitter, 1)
+        # outer.addWidget(splitter, 1)
 
-    def showEvent(self, event: QShowEvent):
-        super().showEvent(event)
-        if not self._did_equal_topic_split and self._results_ai_splitter is not None:
-            QTimer.singleShot(0, self._apply_equal_results_ai_split)
+        outer.addWidget(results_frame, 1)
 
-    def _apply_equal_results_ai_split(self) -> None:
-        sp = self._results_ai_splitter
-        if sp is None or self._did_equal_topic_split:
-            return
-        total = sp.width()
-        if total < 48:
-            QTimer.singleShot(0, self._apply_equal_results_ai_split)
-            return
-        gap = sp.handleWidth()
-        inner = total - gap
-        half = inner // 2
-        sp.setSizes([half, inner - half])
-        self._did_equal_topic_split = True
+    # def showEvent(self, event: QShowEvent):
+    #     super().showEvent(event)
+    #     if not self._did_equal_topic_split and self._results_ai_splitter is not None:
+    #         QTimer.singleShot(0, self._apply_equal_results_ai_split)
+
+    # def _apply_equal_results_ai_split(self) -> None:
+    #     sp = self._results_ai_splitter
+    #     if sp is None or self._did_equal_topic_split:
+    #         return
+    #     total = sp.width()
+    #     if total < 48:
+    #         QTimer.singleShot(0, self._apply_equal_results_ai_split)
+    #         return
+    #     gap = sp.handleWidth()
+    #     inner = total - gap
+    #     half = inner // 2
+    #     sp.setSizes([half, inner - half])
+    #     self._did_equal_topic_split = True
 
     def _add_empty_results_placeholder(self) -> None:
         empty = QFrame()
@@ -779,6 +826,7 @@ class TopicModelingPage(QFrame):
             self._redraw_map_for_filter(filtered)
         else:
             self._render_topic_cards(filtered)
+        self._draw_frequency_chart(filtered)
 
     def _render_topic_cards(self, summary: list[dict]) -> None:
         """Render (or re-render) only the scrollable card area; leaves quality/filter intact."""
@@ -1044,12 +1092,12 @@ class TopicModelingPage(QFrame):
         hdr.addWidget(cnt_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Ask AI button
-        ask_btn = QPushButton("Ask AI")
-        ask_btn.setObjectName("topics-ask-ai-btn")
-        ask_btn.setFixedHeight(26)
-        ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        ask_btn.clicked.connect(lambda: self._ask_ai_about_topic(data))
-        hdr.addWidget(ask_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # ask_btn = QPushButton("Ask AI")
+        # ask_btn.setObjectName("topics-ask-ai-btn")
+        # ask_btn.setFixedHeight(26)
+        # ask_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        # ask_btn.clicked.connect(lambda: self._ask_ai_about_topic(data))
+        # hdr.addWidget(ask_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         lay.addLayout(hdr)
 
@@ -1123,20 +1171,83 @@ class TopicModelingPage(QFrame):
         parent_lay.addWidget(canvas)
         canvas.draw()
 
-    def _ask_ai_about_topic(self, data: dict) -> None:
-        tid = data.get("topic_id", "?")
-        keywords = data.get("keywords", [])
-        examples = data.get("examples", [])
-        kw_str = ", ".join(keywords[:6]) if keywords else "(none)"
-        ex_lines = "\n".join(
-            f"- {ex[:200]}" for ex in examples[:2] if ex
-        )
-        prompt = (
-            f"Tell me about Topic {tid}.\n\n"
-            f"Keywords: {kw_str}\n\n"
-            f"Representative excerpts:\n{ex_lines}"
-        )
-        self._ai_panel.prefill_input(prompt)
+    def _draw_frequency_chart(self, summary: list[dict]) -> None:
+        """Render topic segment counts as a horizontal bar chart"""
+        if self._frequency_lay is None:
+            return
+        while self._frequency_lay.count() > 0:
+            item = self._frequency_lay.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        if not summary:
+            lbl = QLabel("No topics match the current filter.")
+            lbl.setObjectName("topics-results-empty")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._frequency_lay.addWidget(lbl)
+            return
+
+        try:
+            from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+            from matplotlib.figure import Figure
+
+        except ImportError:
+            for entry in sorted(summary, key=lambda e: e.get("segment_count", 0), reverse=True):
+                label = entry.get("generated_label") or f"Topic {entry.get('topic_id', '?')}"
+                self._frequency_lay.addWidget(
+                    QLabel(f"{label}: {entry.get('segment_count', 0)} segments")
+                )
+            self._frequency_lay.addStretch(1)
+            return
+
+        ordered = sorted(summary, key=lambda e: e.get('segment_count', 0))
+        labels = [
+            (e.get("generated_label") or f"Topic {e.get('topic_id', '?')}")[:36]
+            for e in ordered
+        ]
+        counts = [int(e.get("segment_count", 0)) for e in ordered]
+        theme = self._theme_getter() if self._theme_getter else "light"
+        dark = theme == "dark"
+        bg = "#141720" if dark else "#f8fafc"
+        fg = "#cbd5e1" if dark else "#475569"
+
+        fig_h = max(3.2, min(12.0, len(labels) * 0.38 + 1.0))
+        fig = Figure(figsize=(6, fig_h), facecolor=bg)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor(bg)
+        bars = ax.barh(range(len(labels)), counts, color="#4c78a8", height=0.65)
+        ax.set_yticks(range(len(labels)))
+        ax.set_yticklabels(labels, color=fg, fontsize=9)
+        ax.tick_params(axis="x", colors=fg, labelsize=8)
+        ax.set_xlabel("Assigned segments", color=fg, fontsize=9)
+        ax.grid(axis="x", alpha=0.16)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        for bar, value in zip(bars, counts):
+            ax.text(value, bar.get_y() + bar.get_height() / 2, f"  {value}",
+                    va="center", color=fg, fontsize=8)
+        fig.subplots_adjust(left=0.34, right=0.94, top=0.97, bottom=0.12)
+
+        canvas = FigureCanvasQTAgg(fig)
+        self._frequency_lay.addWidget(canvas, 1)
+        canvas.draw()
+
+
+    # def _ask_ai_about_topic(self, data: dict) -> None:
+    #     tid = data.get("topic_id", "?")
+    #     keywords = data.get("keywords", [])
+    #     examples = data.get("examples", [])
+    #     kw_str = ", ".join(keywords[:6]) if keywords else "(none)"
+    #     ex_lines = "\n".join(
+    #         f"- {ex[:200]}" for ex in examples[:2] if ex
+    #     )
+    #     prompt = (
+    #         f"Tell me about Topic {tid}.\n\n"
+    #         f"Keywords: {kw_str}\n\n"
+    #         f"Representative excerpts:\n{ex_lines}"
+    #     )
+    #     self._ai_panel.prefill_input(prompt)
 
     def _redraw_map_for_filter(self, filtered_summary: list[dict]) -> None:
         """Narrow the map to filtered topic IDs; keep detail for currently selected if visible."""
@@ -1249,14 +1360,32 @@ class TopicModelingPage(QFrame):
     def refresh_theme(self) -> None:
         """Align topic page with app light/dark after MainWindow applies theme."""
         self.refresh_action_icons()
-        theme = self._theme_getter() if self._theme_getter else "light"
-        self._ai_panel.update_theme(theme)
+        # theme = self._theme_getter() if self._theme_getter else "light"
+        # self._ai_panel.update_theme(theme)
         if self._map_topic_data:
             self._draw_scatter_map(self._map_topic_data, selected_idx=self._selected_topic_idx)
+        if self._current_summary:
+            self._draw_frequency_chart(self._current_summary)
+
+    def shutdown(self) -> None:
+
+        """Stop background work before the containing window is destroyed."""
+        if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
+            self._process.terminate()
+            if not self._process.waitForFinished(3000):
+                self._process.kill()
+                self._process.waitForFinished(1000)
+            self._process = None
+
+        worker = self._map_worker
+        if worker is not None and worker.isRunning():
+            worker.requestInterruption()
+            worker.wait()
+        self._map_worker = None
 
     # ── Internal helpers ──────────────────────────────────────────────────
 
-    def _sync_gpt4all_model_enabled(self, checked: bool) -> None:
+    def _sync_ollama_model_enabled(self, checked: bool) -> None:
         self._model_edit.setEnabled(checked)
 
     def _selected_input_path(self) -> str:
@@ -1307,12 +1436,12 @@ class TopicModelingPage(QFrame):
             return
         self._last_transcript_path = path
         self._refresh_speaker_dropdown()
-        self._refresh_ai_transcript_context(path)
+        # self._refresh_ai_transcript_context(path)
         if path and os.path.exists(path):
             self._load_results_for_input(path, warn_if_missing=False)
         else:
             self._topics_context = ""
-            self._push_ai_context()
+            # self._push_ai_context()
             self._clear_results()
 
     def _extract_speaker_from_line(self, line: str) -> str | None:
@@ -1427,83 +1556,83 @@ class TopicModelingPage(QFrame):
 
     # ── AI context wiring ────────────────────────────────────────────────
 
-    def _list_transcript_files(self, path: str) -> list[str]:
-        if os.path.isfile(path):
-            return [path]
-        if os.path.isdir(path):
-            return sorted(
-                os.path.join(path, fn)
-                for fn in os.listdir(path)
-                if fn.lower().endswith(".txt")
-            )
-        return []
+    # def _list_transcript_files(self, path: str) -> list[str]:
+    #     if os.path.isfile(path):
+    #         return [path]
+    #     if os.path.isdir(path):
+    #         return sorted(
+    #             os.path.join(path, fn)
+    #             for fn in os.listdir(path)
+    #             if fn.lower().endswith(".txt")
+    #         )
+    #     return []
 
-    def _speaker_stats_from_text(self, text: str) -> str:
-        """Return a compact speaker-turn summary for one transcript."""
-        from collections import Counter
-        counts: Counter[str] = Counter()
-        for line in text.splitlines():
-            speaker = self._extract_speaker_from_line(line)
-            if speaker:
-                counts[speaker] += 1
-        if not counts:
-            return ""
-        parts = [f"{spk} ({n} turn{'s' if n != 1 else ''})" for spk, n in counts.most_common()]
-        return "Speakers: " + ", ".join(parts)
+    # def _speaker_stats_from_text(self, text: str) -> str:
+    #     """Return a compact speaker-turn summary for one transcript."""
+    #     from collections import Counter
+    #     counts: Counter[str] = Counter()
+    #     for line in text.splitlines():
+    #         speaker = self._extract_speaker_from_line(line)
+    #         if speaker:
+    #             counts[speaker] += 1
+    #     if not counts:
+    #         return ""
+    #     parts = [f"{spk} ({n} turn{'s' if n != 1 else ''})" for spk, n in counts.most_common()]
+    #     return "Speakers: " + ", ".join(parts)
 
-    def _build_transcript_context(self, path: str) -> str:
-        """Read the selected transcript(s) and shape them into AI context."""
-        files = self._list_transcript_files(path)
-        if not files:
-            return ""
+    # def _build_transcript_context(self, path: str) -> str:
+    #     """Read the selected transcript(s) and shape them into AI context."""
+    #     files = self._list_transcript_files(path)
+    #     if not files:
+    #         return ""
 
-        header_lines = ["## TRANSCRIPT"]
-        chunks: list[str] = []
-        total = 0
-        for fp in files:
-            try:
-                with open(fp, "r", encoding="utf-8", errors="replace") as f:
-                    body = f.read()
-            except Exception as e:
-                self._append_log(f"[warn] Could not read {fp} for AI context: {e}", "#eab308")
-                continue
-            body = body.strip()
-            if not body:
-                continue
-            stats = self._speaker_stats_from_text(body)
-            truncated = False
-            if len(body) > _AI_CONTEXT_PER_FILE_CHARS:
-                body = body[:_AI_CONTEXT_PER_FILE_CHARS]
-                truncated = True
-            file_header = f"### File: {os.path.basename(fp)}"
-            if truncated:
-                file_header += "  (truncated to first ~8 000 chars)"
-            if stats:
-                file_header += f"\n{stats}"
-            piece = f"{file_header}\n\n{body}"
-            if total + len(piece) > _AI_CONTEXT_TOTAL_CHARS:
-                chunks.append(
-                    f"### File: {os.path.basename(fp)}\n[omitted — context budget reached]"
-                )
-                break
-            chunks.append(piece)
-            total += len(piece)
+    #     header_lines = ["## TRANSCRIPT"]
+    #     chunks: list[str] = []
+    #     total = 0
+    #     for fp in files:
+    #         try:
+    #             with open(fp, "r", encoding="utf-8", errors="replace") as f:
+    #                 body = f.read()
+    #         except Exception as e:
+    #             self._append_log(f"[warn] Could not read {fp} for AI context: {e}", "#eab308")
+    #             continue
+    #         body = body.strip()
+    #         if not body:
+    #             continue
+    #         stats = self._speaker_stats_from_text(body)
+    #         truncated = False
+    #         if len(body) > _AI_CONTEXT_PER_FILE_CHARS:
+    #             body = body[:_AI_CONTEXT_PER_FILE_CHARS]
+    #             truncated = True
+    #         file_header = f"### File: {os.path.basename(fp)}"
+    #         if truncated:
+    #             file_header += "  (truncated to first ~8 000 chars)"
+    #         if stats:
+    #             file_header += f"\n{stats}"
+    #         piece = f"{file_header}\n\n{body}"
+    #         if total + len(piece) > _AI_CONTEXT_TOTAL_CHARS:
+    #             chunks.append(
+    #                 f"### File: {os.path.basename(fp)}\n[omitted — context budget reached]"
+    #             )
+    #             break
+    #         chunks.append(piece)
+    #         total += len(piece)
 
-        if not chunks:
-            return ""
-        return "\n\n".join(header_lines + chunks)
+    #     if not chunks:
+    #         return ""
+    #     return "\n\n".join(header_lines + chunks)
 
-    def _refresh_ai_transcript_context(self, path: str) -> None:
-        self._transcript_context = self._build_transcript_context(path) if path else ""
-        self._push_ai_context()
+    # def _refresh_ai_transcript_context(self, path: str) -> None:
+    #     self._transcript_context = self._build_transcript_context(path) if path else ""
+    #     self._push_ai_context()
 
-    def _push_ai_context(self) -> None:
-        parts: list[str] = []
-        if self._topics_context:
-            parts.append(self._topics_context)
-        if self._transcript_context:
-            parts.append(self._transcript_context)
-        self._ai_panel.set_context("\n\n".join(parts))
+    # def _push_ai_context(self) -> None:
+    #     parts: list[str] = []
+    #     if self._topics_context:
+    #         parts.append(self._topics_context)
+    #     if self._transcript_context:
+    #         parts.append(self._transcript_context)
+    #     self._ai_panel.set_context("\n\n".join(parts))
 
     def _open_output_folder(self) -> None:
         from PySide6.QtGui import QDesktopServices
@@ -1553,7 +1682,7 @@ class TopicModelingPage(QFrame):
         # Stale topic results shouldn't bleed into the next conversation;
         # transcript context stays so the user can already chat about the input.
         self._topics_context = ""
-        self._push_ai_context()
+        # self._push_ai_context()
 
         python = _resolve_python()
         args = [_PIPELINE_SCRIPT, input_path]
@@ -1562,9 +1691,9 @@ class TopicModelingPage(QFrame):
         if speaker:
             args.append(speaker)
 
-        if self._gpt4all_checkbox.isChecked():
+        if self._ollama_checkbox.isChecked():
             args.append("--label")
-            model = self._model_edit.text().strip() or "mistral-7b-openorca.Q4_0.gguf"
+            model = self._model_edit.text().strip() or "llama3.1" #"mistral-7b-openorca.Q4_0.gguf"
             args.append(model)
 
         self._append_log(f"[pipeline] Starting: {os.path.basename(input_path)}")
@@ -1586,7 +1715,7 @@ class TopicModelingPage(QFrame):
             self._run_btn.setEnabled(False)
             self._run_btn.setText("Running…")
             self._collapse_options_panel()
-            self._show_progress_in_results(show_labeling=self._gpt4all_checkbox.isChecked())
+            self._show_progress_in_results(show_labeling=self._ollama_checkbox.isChecked())
 
     def _on_stdout(self) -> None:
         if not self._process:
@@ -1680,7 +1809,7 @@ class TopicModelingPage(QFrame):
             QMessageBox.warning(self, "Topic Modeling", f"Could not read results:\n{e}")
             return False
         self._render_results(summary, path)
-        self._feed_results_to_ai(summary)
+        # self._feed_results_to_ai(summary)
         return True
 
     def _load_results_for_input(self, input_path: str, warn_if_missing: bool) -> bool:
@@ -1695,7 +1824,7 @@ class TopicModelingPage(QFrame):
 
         self._clear_results()
         self._topics_context = ""
-        self._push_ai_context()
+        # self._push_ai_context()
 
         if warn_if_missing:
             expected = summary_path or _OUTPUT_DIR
@@ -1736,52 +1865,52 @@ class TopicModelingPage(QFrame):
         latest = candidates[0]
         self._load_summary_file(latest)
 
-    def _feed_results_to_ai(self, summary: list[dict]) -> None:
-        """Format topic results as readable context and pass them to the AI panel."""
-        if not summary:
-            self._topics_context = ""
-            self._push_ai_context()
-            return
+    # def _feed_results_to_ai(self, summary: list[dict]) -> None:
+    #     """Format topic results as readable context and pass them to the AI panel."""
+    #     if not summary:
+    #         self._topics_context = ""
+    #         self._push_ai_context()
+    #         return
 
-        total_segments = sum(e.get("segment_count", 0) for e in summary)
-        lines = [
-            "## TOPIC ANALYSIS",
-            f"Total topics: {len(summary)}  |  Total segments analysed: {total_segments}",
-            "",
-        ]
-        for entry in summary:
-            tid = entry.get("topic_id", "?")
-            label = entry.get("generated_label", "")
-            count = entry.get("segment_count", 0)
-            keywords = entry.get("keywords", [])
-            examples = entry.get("examples", [])
-            source_files = entry.get("source_files", [])
+    #     total_segments = sum(e.get("segment_count", 0) for e in summary)
+    #     lines = [
+    #         "## TOPIC ANALYSIS",
+    #         f"Total topics: {len(summary)}  |  Total segments analysed: {total_segments}",
+    #         "",
+    #     ]
+    #     for entry in summary:
+    #         tid = entry.get("topic_id", "?")
+    #         label = entry.get("generated_label", "")
+    #         count = entry.get("segment_count", 0)
+    #         keywords = entry.get("keywords", [])
+    #         examples = entry.get("examples", [])
+    #         source_files = entry.get("source_files", [])
 
-            heading = f"### Topic {tid}"
-            if label:
-                heading += f" — {label}"
-            heading += f"  ({count} segment{'s' if count != 1 else ''})"
-            lines.append(heading)
+    #         heading = f"### Topic {tid}"
+    #         if label:
+    #             heading += f" — {label}"
+    #         heading += f"  ({count} segment{'s' if count != 1 else ''})"
+    #         lines.append(heading)
 
-            if keywords:
-                lines.append(f"Keywords: {', '.join(keywords)}")
+    #         if keywords:
+    #             lines.append(f"Keywords: {', '.join(keywords)}")
 
-            # Collect unique source files for this topic
-            unique_sources = sorted({s for s in source_files if s})
-            if unique_sources:
-                lines.append(f"Sources: {', '.join(unique_sources)}")
+    #         # Collect unique source files for this topic
+    #         unique_sources = sorted({s for s in source_files if s})
+    #         if unique_sources:
+    #             lines.append(f"Sources: {', '.join(unique_sources)}")
 
-            if examples:
-                lines.append("Representative excerpts:")
-                for i, ex in enumerate(examples[:5]):
-                    src = source_files[i] if i < len(source_files) else None
-                    prefix = f"  [{src}] " if src else "  "
-                    lines.append(f'{prefix}"{ex[:300]}{"…" if len(ex) > 300 else ""}"')
+    #         if examples:
+    #             lines.append("Representative excerpts:")
+    #             for i, ex in enumerate(examples[:5]):
+    #                 src = source_files[i] if i < len(source_files) else None
+    #                 prefix = f"  [{src}] " if src else "  "
+    #                 lines.append(f'{prefix}"{ex[:300]}{"…" if len(ex) > 300 else ""}"')
 
-            lines.append("")
+    #         lines.append("")
 
-        self._topics_context = "\n".join(lines)
-        self._push_ai_context()
+    #     self._topics_context = "\n".join(lines)
+    #     self._push_ai_context()
 
     def load_results_from_file(self, path: str) -> None:
         """Public entry for loading a specific summary JSON (future use)."""
@@ -1814,7 +1943,12 @@ class TopicModelingPage(QFrame):
             self._results_inner_lay.addWidget(lbl)
             self._results_inner_lay.addStretch(1)
             return
+        self._inner_splitter.setVisible(True)
         self._launch_results_view(summary)
+        self._draw_frequency_chart(summary)
+        self._show_map_loading()
+        self._launch_map_worker(summary)
+        QTimer.singleShot(0, self._set_inner_split)
 
     # ── Transcript click-through helpers ──────────────────────────────────
 

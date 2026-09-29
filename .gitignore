@@ -16,6 +16,7 @@ FB_03_ES_GC_02_C1_FB_03_ES_GC_02_C2_16khz.wav
 __pycache__/
 *.py[cod]
 *$py.class
+.python-version
 
 # Outputs
 outputs/
@@ -27,6 +28,7 @@ transcription_spanish.txt
 
 # Info
 info.txt
+requirements.txt
 
 # macOS
 .DS_Store
